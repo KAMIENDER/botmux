@@ -48,3 +48,39 @@ BOTMUX_VERSION=vX.Y.Z sh /tmp/botmux-fork-install.sh
 安装后需重启相关 bot，才能加载新二进制。发布和部署是单独动作；仅同步源码不会改变正在运行的服务。
 
 本仓库保留上游 MIT 许可证和版权声明。不要将 `~/.botmux` 的机器人密钥、运行配置或会话历史复制进 Git 仓库。
+
+
+## TRAE Codebase Git 登录自动续期（Linux 开发机）
+
+当前是独立的主机维护脚本，不依赖 Botmux 二进制发版或 Codex App。只管理已经登录的 git_codebase / cloud_cli_jwt 凭据；不会替换 PAT、SSO 或其他登录方式，也不会创建新身份。
+
+~~~bash
+/usr/bin/python3 scripts/install-traex-auth-renew.py
+systemctl --user list-timers botmux-traex-auth-renew.timer
+cat ~/.local/state/botmux/traex-auth-renew/status.json
+~~~
+
+安装脚本将执行文件复制到 ~/.local/lib/botmux/traex-auth-renew.py，创建并启用同名的用户 systemd service/timer。修改脚本后需重新运行安装脚本，源码提交/同步不会自动修改已部署文件。用户 manager 需持续运行；当前 SG 开发机已经启用 linger。
+
+- 每 6 小时检查一次，剩余不足 48 小时才运行原生 traex login --git-code。首次启用也会立即检查。
+- 先在临时 TRAE_HOME 登录，确认同一账号、同一区域且有效期延长，再以原子替换更新正式 auth.json。失败保留正式文件，下次检查再尝试；不重启 bot 或 CLI。
+- 自身运行锁避免重叠，写入时使用 TRAE 的 auth.json.lock，期间其他登录改过正式凭据就放弃本次替换。
+- 登录最多等待 60 秒；服务限制 90 秒。状态只记录时间和固定原因码，不保存凭据或原生登录输出。
+- Codebase Git 自身的认证也必须可用。该认证失效、网络异常或 CLI 登录协议变化时，续期可能失败，应检查状态文件并恢复原生登录。
+
+查看当前到期时间，或手动通过相同脚本续一次：
+
+~~~bash
+/usr/bin/python3 ~/.local/lib/botmux/traex-auth-renew.py --check
+/usr/bin/python3 ~/.local/lib/botmux/traex-auth-renew.py --force
+systemctl --user show botmux-traex-auth-renew.service -p Result -p ExecMainStatus
+~~~
+
+停用：
+
+~~~bash
+systemctl --user disable --now botmux-traex-auth-renew.timer
+systemctl --user stop botmux-traex-auth-renew.service
+~~~
+
+本脚本不会发送飞书消息。默认失败记录在本机状态文件和服务日志中。
