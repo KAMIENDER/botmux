@@ -1,8 +1,6 @@
 #!/usr/bin/env node
 'use strict';
 const readline = require('node:readline');
-const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
 const {NativeClient,privateJson} = require('./native-client.cjs');
 
@@ -49,11 +47,13 @@ async function setup(command) {
   if (previous) {
     native = await client.request('lite','get_chat_session',{chat_session_id:previous.agentThreadId},previous.agentThreadId);
   } else {
+    if (!/^[A-Za-z0-9_-]{1,100}$/.test(command.sessionId || '')) throw new Error('Invalid Botmux session ID');
     let binding;
-    try {binding = privateJson('bindings.json')[command.sessionId];}
+    try {binding = privateJson('bindings/' + command.sessionId + '.json');}
     catch (error) {if (error.code !== 'ENOENT') throw error;}
     if (binding) {
-      native = await client.request('lite','get_chat_session',{chat_session_id:binding},binding);
+      if (binding.version !== 1 || binding.cwd !== cwd) throw new Error('Native binding folder mismatch');
+      native = await client.request('lite','get_chat_session',{chat_session_id:binding.nativeSessionId},binding.nativeSessionId);
     } else {
       const projects = await pageAll('list_projects_v2');
       const project = projects.find(x => x.single_root_workspace_folder === cwd)
@@ -108,26 +108,7 @@ async function runTurn(command) {
   try {
     // Never replay an accepted request after a timeout: the backend may have
     // executed tools even when the transport lost its acknowledgement.
-    const adoption = command.content.match(/^\s*\[botmux-trae-native-adopt:([0-9a-f-]{36})\]\s*$/m);
-    let content = command.content;
-    if (adoption) {
-      const selection = privateJson('adoptions/' + adoption[1] + '.json');
-      if (!Number.isFinite(Date.parse(selection.expiresAt)) || Date.parse(selection.expiresAt) <= Date.now()) throw new Error('Native adoption request expired');
-      const target = await client.request('lite','get_chat_session',{chat_session_id:selection.nativeSessionId},selection.nativeSessionId);
-      if (target.user_id !== privateJson('auth.json').userInfo.user_id
-          || target.main_folder !== state.providerState.cwd || target.main_folder !== selection.cwd) {
-        throw new Error('Native adoption account or folder mismatch');
-      }
-      // The controller creates an owner-only, single-use request; ordinary
-      // chat text cannot choose an arbitrary conversation by guessing its ID.
-      fs.unlinkSync(path.join(os.homedir(),'.botmux','trae-native','adoptions',adoption[1] + '.json'));
-      state = {...state,generation:state.generation + 1,remoteSessionId:target.chat_session_id,
-        agentThreadId:target.chat_session_id,providerState:{...state.providerState,projectId:target.local_project_id}};
-      client.projectId = target.local_project_id;
-      emit({type:'lineage_changed',state});
-      sid = state.agentThreadId;
-      content = content.replace(adoption[0],'');
-    }
+    const content = command.content;
     sendAttempted = true;
     sent = await client.request('lite','send_message',{
       chat_session_id:sid,content:[{type:'text',text_content:content}],

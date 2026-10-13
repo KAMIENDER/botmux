@@ -87,9 +87,9 @@
 ~/.local/bin/botmux-trae-native adopt <native-session-id> --bot <app-id>
 ```
 
-`sessions` 当前显示最多 100 条。`adopt` 校验账号和初始化目录，创建权限 600、有效期 5 分钟的一次性接入请求，然后调用现有 Botmux headless session API。provider 消费请求并切换到原生 ID，同时推进 generation。普通聊天中粘贴一个原生 ID不具有接入能力。
+`sessions` 当前显示最多 100 条。`adopt` 校验目标 Bot、账号和初始化目录，调用现有 `session create` 注册一个未启动的 Botmux 会话，再建立权限 600 的私有绑定，最后通过 `session send` 启动。provider 从第一轮就使用原来的原生 ID，不新建空原生任务。普通聊天中粘贴一个原生 ID不具有接入能力。
 
-接入会追加一句“原生会话接入成功”的验证回复，不执行工具。输出提供 Botmux session ID / headless ID，后续可直接 `botmux session send` 续聊。若需要绑定到飞书，应另外使用 Botmux 现有绑定/发布流程。该 helper 不发送飞书消息。首次接入会留下一个没有执行内容的空原生任务，因为 Botmux 会先启动 provider 再提交首轮。
+接入会追加一句“原生会话接入成功”的验证回复，不执行工具。输出提供 Botmux session ID / headless ID，后续可直接 `botmux session send` 续聊。若需要绑定到飞书，应另外使用 Botmux 现有绑定/发布流程。该 helper 不发送飞书消息。原生 ID 的绑定只由开发机宿主 helper 写入；resume 仍核验账号和工作区。
 
 当前核心 `/adopt` 卡片不支持发现 Remote Runner 原生历史；这里提供的是独立宿主 helper。旧 TraeX CLI 对话使用不同的存储，**没有自动转换成 TRAE 原生会话**。旧 CLI 文件仍保留；如需继续旧 CLI 模式，应回退该 Bot 的配置。安装的入口在 TTY/旧 CLI 参数调用下仍委托原 TraeX，以保持旧执行方式兼容。
 
