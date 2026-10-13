@@ -88,7 +88,10 @@ async function setup(command) {
 }
 
 function modelParameters() {
-  const model = (state.providerState.model || 'gpt-6.1-sol').toLowerCase();
+  const selected = state.providerState.model || 'gpt-6.1-sol';
+  // Keep case-sensitive native catalog IDs (e.g. Dola-Seed-2.0-Code). Older
+  // dashboard GPT display labels still map to their lowercase native IDs.
+  const model = /^gpt-/i.test(selected) ? selected.toLowerCase() : selected;
   return {model_name:model,agent_type:'solo_agent',agent_id:'solo_agent',model_selection_strategy:'manual',
     custom_model:{config_name:model,model_name:model,config_source:1,is_preset:true,
       use_remote_service:true,multimodal:true,reasoning_effort:state.providerState.reasoningEffort || 'high'}};

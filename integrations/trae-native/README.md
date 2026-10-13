@@ -71,9 +71,21 @@
 
 安装脚本还会在 `~/.local/bin/` 没有标准入口时，创建 `botmux-remote-runner` → `botmux-trae-native` 的链接。后台 CLI 列表只检测默认程序名，忽略单个 Bot 的 `cliPathOverride`；此入口使检测对应到实际已安装的原生 provider，避免误报“未安装”。已有其它 Remote Runner 入口时保留它，不覆盖；目标 Bot 仍使用显式路径。daemon 的 PATH 需要包含 `~/.local/bin`。
 
-新会话保留原来的 model / reasoningEffort；内置模型 ID 转小写传给 TRAE。已实际验证 `gpt-6.1-sol/high` 和 `GPT-5.6-Sol/xhigh`。其它组合由原生后端校验。
+新会话保留原来的 model / reasoningEffort；保留目录中模型 ID 的大小写；旧 GPT 显示名称兼容转为小写原生 ID。已实际验证 `gpt-6.1-sol/high` 和 `GPT-5.6-Sol/xhigh`。其它组合由原生后端校验。
 
 新会话接受当前用户可访问的、已存在的绝对目录。启动时自动准备该目录的规则上下文，复用该开发机已有 SSH 任务的 remote authority，建立对应 Native Project，并注册 Session Workspace；不要求提前在桌面打开这个项目。Botmux 的 `remoteBackendState.agentThreadId` 就是该原生 ID。重连会验证账号和目录，保留 ID；rebuild 推进 generation。
+
+## 模型自动发现
+
+打开后台 Agent 配置时，现有模型探测会调用标准入口的 `debug models`。原生 helper 通过当前账号向常驻后端请求 `model.model_list_by_function` 的 `solo_agent` 目录，并要求刷新原生目录缓存；只返回 `status` 和 `selectable` 均为 true 的预置模型。Builder/chat 的目录不同，不与 SOLO Agent 混用。后台沿用 10 分钟成功缓存；刷新配置页会重新请求，缓存过期后自动获取更新，无需手工维护模型名单。
+
+输出只包含模型 ID、显示名称和可见性，不导出原生目录中的连接配置或凭据。读取目录不创建会话，也不改变 Bot 的当前模型；失败保留自定义模型入口。当前适配器执行预置模型，用户自定义的带独立连接配置的模型尚未接入。
+
+可在开发机检查同一个自动发现入口：
+
+```sh
+~/.local/bin/botmux-remote-runner debug models
+```
 
 ## 接入已有 TRAE 原生会话
 
@@ -119,3 +131,4 @@ TRAE 升级可能更换安装路径、SDK 或内部接口。先暂停目标 Bot�
 - 宿主 helper 接入已有原生任务，Botmux 读到桌面之前的英文标记并返回；只重启目标 Bot 后再次续聊仍保留原生 ID 和上下文。
 - Botmux 关闭验证会话成功，原生历史仍可读取。
 - 在未加入初始化目录列表的 `/home/hejiadong.1024/project/ai_review_self_iteration` 中，真实 headless 运行自动创建原生会话并返回 `AUTO_WORKSPACE_OK`；没有手动打开或初始化该项目。此项验证没有执行工具或业务任务。
+- 原生 SOLO Agent 模型目录自动返回 20 个当前可选预置模型，包括 GPT-6.1-Sol、GPT-6-Astra 和 GPT-5.6 系列；无需保存一份静态模型名单。

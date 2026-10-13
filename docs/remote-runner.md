@@ -33,6 +33,18 @@
 
 TRAE Remote SSH 的实验性原生会话适配见 [integrations/trae-native](../integrations/trae-native/README.md)。它使用现有协议和开发机用户服务，兼容性受 TRAE 内部接口版本限制。
 
+## 可选模型自动发现
+
+provider 可额外提供一次性 CLI 子命令 `debug models`，输出以下目录后退出：
+
+```json
+{"models":[{"slug":"example-model","visibility":"list"}]}
+```
+
+这是会话 JSONL 协议之外的元数据接口；不创建会话或执行 turn。后台复用其它 CLI 的 `detectModels()` 链路，只在选择该 CLI 时探测，8 秒超时、16 MiB 输出上限，成功结果缓存 10 分钟。只显示非空 slug 且 `visibility: "list"` 的项；未实现、报错、超时或目录无效时回退原来的静态/自定义模型选择。
+
+当前后台目录按 CLI 选择键探测 PATH 中的标准 `botmux-remote-runner`；单个 Bot 的 `cliPathOverride` 仍用于会话启动，不改变此目录入口。不要在这个公开输出中返回凭据或模型连接配置。
+
 ## 传输与握手
 
 BotMux 启动一个 provider 子进程，通过 stdin 逐行写入命令，通过 stdout 逐行读取事件。每行都是一个完整 JSON 对象，必须携带：

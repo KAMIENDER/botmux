@@ -1,4 +1,7 @@
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { resolveCommand } from './registry.js';
+import { parseDebugModelsJson } from './model-catalog-json.js';
 import type { CliAdapter } from './types.js';
 
 /**
@@ -18,6 +21,21 @@ export function createRemoteRunnerAdapter(pathOverride?: string): CliAdapter {
     allowExtraArgs: true,
     buildArgs() { return []; },
     buildResumeCommand() { return null; },
+    // Optional CLI metadata entrypoint, separate from the session JSONL channel.
+    // Reuse the other adapters' catalog format; older providers fail soft.
+    async detectModels(): Promise<readonly string[] | null> {
+      try {
+        const { stdout } = await promisify(execFile)(this.resolvedBin, ['debug', 'models'], {
+          timeout: 8000,
+          maxBuffer: 16 * 1024 * 1024,
+          windowsHide: true,
+        });
+        const models = parseDebugModelsJson(stdout);
+        return models.length > 0 ? models : null;
+      } catch {
+        return null;
+      }
+    },
     async writeInput() {
       return {
         submitted: false,

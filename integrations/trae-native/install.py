@@ -20,8 +20,10 @@ directory = home / '.config/systemd/user'
 directory.mkdir(parents=True,exist_ok=True)
 (directory / 'botmux-trae-native.service').write_text(unit)
 wrapper = ('#!/bin/sh\ncase "$1" in\n'
-           '  sessions|doctor|adopt) exec ' + shlex.quote(node) + ' '
+           '  sessions|models|doctor|adopt) exec ' + shlex.quote(node) + ' '
            + shlex.quote(str(root / 'session-cli.cjs')) + ' "$@" ;;\n'
+           '  debug) if [ "$2" = models ] && [ "$#" -eq 2 ]; then exec ' + shlex.quote(node) + ' '
+           + shlex.quote(str(root / 'session-cli.cjs')) + ' models; fi ;;\n'
            '  --version) echo "botmux-trae-native 0.1.0"; exit 0 ;;\nesac\n'
            '# Existing TraeX tmux sessions retain their old executable behavior.\n'
            'if [ -t 0 ] || [ "$#" -gt 0 ]; then\n'

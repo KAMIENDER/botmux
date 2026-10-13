@@ -33,6 +33,25 @@ async function main() {
   }
   const client = new NativeClient();
   try {
+    if (operation === 'models') {
+      // The bot runs SOLO Agent. Builder/chat catalogs expose different models;
+      // use the native account-scoped catalog and refresh its own cache.
+      const data = await client.request('model','model_list_by_function',
+        {functions:['solo_agent'],force_refresh:true});
+      const catalog = data.list?.find(item => item.function === 'solo_agent')?.models;
+      if (!Array.isArray(catalog)) throw new Error('Native SOLO Agent model catalog is unavailable');
+      const seen = new Set(),models = [];
+      for (const item of catalog) {
+        if (item.status !== true || item.selectable !== true || item.is_preset !== true
+            || typeof item.name !== 'string' || !item.name.trim() || seen.has(item.name)) continue;
+        seen.add(item.name);
+        // Native entries may include credentials and endpoint configuration.
+        // Export only the public picker metadata, never the raw native entry.
+        models.push({slug:item.name,display_name:item.display_name || item.name,visibility:'list'});
+      }
+      console.log(JSON.stringify({models}));
+      return;
+    }
     if (operation === 'sessions') {
       const data = await client.request('lite','list_chat_sessions',{page_size:100});
       console.log(JSON.stringify((data.items || []).map(item => ({id:item.chat_session_id,title:item.title,
@@ -40,7 +59,7 @@ async function main() {
       return;
     }
     if (operation !== 'adopt' || !id || !/^[a-zA-Z0-9-]{8,80}$/.test(id)) {
-      throw new Error('Usage: botmux-trae-native sessions | doctor | adopt <native-id> --bot <app-id>');
+      throw new Error('Usage: botmux-trae-native sessions | models | doctor | adopt <native-id> --bot <app-id>');
     }
     const botAt=args.indexOf('--bot'),appId=botAt >= 0 ? args[botAt+1] : undefined;
     const targetBot=privateJson('../bots.json').find(bot => bot.larkAppId === appId);

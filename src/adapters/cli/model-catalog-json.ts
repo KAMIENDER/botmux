@@ -4,7 +4,8 @@
  * traex / codex / coco（codex 家族，coco 与 traex 共用同一 traecli 二进制）
  * 的 `debug models` 子命令输出同构 JSON：
  * `{"models":[{"slug":"...","visibility":"list",...]}`。
- * 各适配器的 detectModels 复用本解析，过滤逻辑保持一致。
+ * 各适配器的 detectModels 复用本解析，过滤逻辑保持一致；Remote Runner
+ * 的可选 debug models 元数据入口也使用同一格式。
  */
 
 /**
