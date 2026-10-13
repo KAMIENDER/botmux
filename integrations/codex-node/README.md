@@ -18,6 +18,7 @@ WebSocket 端点；app-server proxy 的 control socket 是另一种传输，不�
 ~~~bash
 python3 integrations/codex-node/install-sg.py \
   --name mac --remote-workspace /Users/example/my_project \
+  --remote-root /Users/example \
   --codex-version 'codex-cli <Mac 上实际版本>'
 ~~~
 
@@ -46,6 +47,11 @@ launchctl bootstrap gui/$(id -u) \
 
 Botmux 的目录存在性检查在 SG 本机执行，所以 SG workspace 是控制面的空目录
 别名，proxy 将结构化 cwd 转为真实 Mac 工作目录；它不是远程文件挂载或源码同步。
+通过 --remote-root 可显式补充桌面历史会话的目录根（例如自己的 Mac home）。
+原生 thread/list、thread/read 返回的 cwd 会转换为私有 SG 目录别名，并先创建空
+目录，使 /adopt 不会因 SG 上找不到 /Users/... 而错误回退到 SG home。只创建目录，
+不创建假的 .git，不复制代码或会话文件。超出配置映射的请求直接返回 JSON-RPC
+参数错误，不拖到 90 秒启动超时；不自动重放或替换 threadId。
 日常任务可以直接让 Codex 在真实 Mac 工作区进入具体仓库。Botmux 自己在 SG
 执行的 Git worktree、文件预览、shell helper 与技能安装不会自动搬到 Mac。
 
@@ -57,8 +63,9 @@ Botmux 的目录存在性检查在 SG 本机执行，所以 SG workspace 是控�
 - native App Server 常驻在 Mac。单个 SG proxy 退出只断开客户端。
 - 既有桌面端 thread 的 writer ownership 不变；不强行恢复正由另一个服务端写入
   的 thread，不修改锁文件，不宣称接入能接管所有正在运行的桌面会话。
-- 当前 cwd 映射只覆盖指定的 Mac workspace 根；其余目录没有自动跨主机路由。
-- 新 thread 的 developer instructions 增补实际执行主机与 helper 边界，普通
+- cwd 映射覆盖 workspace 和显式配置的 remote-root；其余目录没有自动跨主机路由。
+- 新 thread 以及 runner 已明确附带 developer instructions 的 resume 请求增补
+  实际执行主机与 helper 边界；没有自行发起 resume。普通
   最终回复继续走 SG 的现有自动转发。没有在 Mac 暴露宿主 Botmux 管理权限。
 - JSON-RPC 单条及启动缓冲上限 16 MiB；上传的受支持图片转换为原生 image 输入，
   单张最多 8 MiB。普通文件附件中的 SG 文件路径不会自动同步到 Mac。
