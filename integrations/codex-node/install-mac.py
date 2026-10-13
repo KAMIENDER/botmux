@@ -17,12 +17,17 @@ state=home/'.local/state/botmux-codex-node'
 state.mkdir(parents=True,exist_ok=True);state.chmod(0o700)
 lib=home/'.local/lib/botmux-codex-node'
 lib.mkdir(parents=True,exist_ok=True);lib.chmod(0o700)
-shutil.copy2(str(pathlib.Path(__file__).parent/'host.py'),str(lib/'host.py'))
+for name in ('host.py', 'desktop_connection.py'):
+    shutil.copy2(str(pathlib.Path(__file__).parent/name), str(lib/name))
 version=subprocess.check_output([args.codex,'--version'],text=True).strip()
 config={'ssh_host':args.ssh_host,'remote_socket':args.remote_socket,
         'local_socket':str(state/'codex.sock'),'codex_bin':args.codex,
         'remote_workspace':str(workspace),'codex_version':version}
 config_path=state/'config.json'
+if config_path.exists():
+    existing=json.loads(config_path.read_text())
+    if 'desktop_connection' in existing:
+        config['desktop_connection']=existing['desktop_connection']
 config_path.write_text(json.dumps(config,indent=2)+'\n');config_path.chmod(0o600)
 label='com.botmux.codex-node.mac'
 plist_path=home/'Library/LaunchAgents'/ (label+'.plist')

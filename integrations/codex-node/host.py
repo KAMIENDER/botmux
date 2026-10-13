@@ -5,6 +5,7 @@ There is no IM receiver or Botmux daemon here. SSH credentials and Codex auth
 remain in their existing host stores; disconnects never replay task requests.
 """
 import fcntl, json, os, pathlib, signal, stat, subprocess, sys, time
+from desktop_connection import publish_desktop_endpoint
 
 config_path = pathlib.Path(sys.argv[1])
 config = json.loads(config_path.read_text())
@@ -70,7 +71,8 @@ if log_path.exists() and log_path.stat().st_size > 8 * 1024 * 1024:
 log_fd = os.open(str(log_path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
 with os.fdopen(log_fd, 'ab', buffering=0) as log:
     codex = subprocess.Popen([
-        config['codex_bin'], 'app-server', '--listen', 'unix://' + config['local_socket']
+        config['codex_bin'], '-c', 'features.code_mode_host=true',
+        'app-server', '--listen', 'unix://' + config['local_socket']
     ], stdin=subprocess.DEVNULL, stdout=log, stderr=log, cwd=config['remote_workspace'])
     children.append(codex)
     deadline = time.monotonic() + 30
@@ -83,6 +85,14 @@ with os.fdopen(log_fd, 'ab', buffering=0) as log:
         write_status(codex_running=False, tunnel_running=False, reason='codex_start_failed')
         wait_child(codex)
         sys.exit(1)
+    # This only selects the transport for FUTURE desktop launches. Never quit
+    # the desktop or terminate its private app-server while a user turn is live.
+    try:
+        desktop_shared = publish_desktop_endpoint(config)
+    except (RuntimeError, OSError, subprocess.SubprocessError) as error:
+        desktop_shared = False
+        log.write(('codex-node: shared desktop endpoint was not selected: '
+                   + str(error) + '\n').encode())
     delay = 2
     while not stopping and codex.poll() is None:
         try:
@@ -106,7 +116,8 @@ with os.fdopen(log_fd, 'ab', buffering=0) as log:
             write_status(codex_running=codex.poll() is None,
                          tunnel_running=tunnel.poll() is None,
                          reason='connected' if tunnel.poll() is None else 'ssh_connect_failed',
-                         codex_pid=codex.pid, tunnel_pid=tunnel.pid)
+                         codex_pid=codex.pid, tunnel_pid=tunnel.pid,
+                         desktop_endpoint_selected=desktop_shared)
             while not stopping and codex.poll() is None and tunnel.poll() is None:
                 time.sleep(1)
             wait_child(tunnel)

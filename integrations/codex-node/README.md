@@ -73,6 +73,43 @@ Botmux 的目录存在性检查在 SG 本机执行，所以 SG workspace 是控�
   下拉按 CLI 全局键探测，不是按每个 cliRuntime 单独探测；不会据此宣称 UI
   已经显示 Mac 专属的模型目录。
 
+
+## 桌面端与节点共用服务（可选）
+
+独立 App Server 能读取同一个 Codex home 的历史，但它不能恢复正由桌面端
+私有 stdio App Server 占用的线程。看到 /adopt 列表只证明历史发现成功，不证明
+线程能够被接管。两个独立进程争抢同一个 writer 会收到
+`already has an active writer`，重试 /adopt 或放大启动超时无法解决。
+
+当前安装版本的桌面端连接选择支持 CODEX_APP_SERVER_WS_URL。本集成提供显式
+启用/回退脚本，使下一次桌面启动与 SG 客户端连接同一个原生 Unix WebSocket
+端点；不修改应用包，不拦截 stdio，不读取或重用桌面的私有 MCP caller 凭据，
+也不增加 TCP 或公网监听。该连接选择属于已安装桌面实现，升级桌面后需要重新
+确认兼容性，不能视为稳定的桌面公共 API。
+
+~~~bash
+python3 ~/.local/lib/botmux-codex-node/desktop_connection.py --enable
+~~~
+
+启用后必须先结束桌面正在运行的任务，**完全退出并重新打开桌面应用**，只关闭
+窗口不能证明旧 writer 已释放。脚本不会代替用户退出 App，不会杀掉其私有
+app-server。LaunchAgent 在以后登录时重新发布该连接选择。原节点启动时启用
+桌面使用的 code_mode_host 能力；SG 仍然独占飞书接入和 Botmux 管理。
+
+已有 prepared 消息不能因换传输而直接重放或清空 ledger。正常恢复机制无法证明
+旧输入未发送时，只能通过 Botmux 正常关闭失败的接入，再重新 /adopt；关闭接入
+不删除原生 Codex 对话。重新接入后再发送新的消息，避免重复执行旧输入。
+
+~~~bash
+python3 ~/.local/lib/botmux-codex-node/desktop_connection.py --status
+python3 ~/.local/lib/botmux-codex-node/desktop_connection.py --disable
+~~~
+
+--status 只确认连接选择，不能证明正在运行的桌面已经连接新端点。实际验收需要
+桌面端与 Botmux 在同一个 thread ID 上继续真实对话。--disable 只恢复本集成
+设置的环境值，不覆盖用户后来选择的其它端点；回退也需要完全退出并重开桌面。
+停用 Mac 节点前应先回退共享连接，否则使用该节点的桌面也会断开。
+
 ## 查看与停用
 
 Mac 状态：~/.local/state/botmux-codex-node/status.json。transport.log 与 launchd.log
