@@ -2827,6 +2827,7 @@ describe('codex-app-runner app-server protocol integration', { timeout: 120_000,
       await waitFor(harness, () => control.finals.length >= 1);
       const threadStart = readRequests(logPath).find(r => r.method === 'thread/start');
       expect(threadStart).toBeTruthy();
+      expect(threadStart.params.threadSource).toBe('user');
       expect(threadStart.params.model).toBe('gpt-5.6-terra');            // top-level model
       expect(threadStart.params.config?.model_reasoning_effort).toBe('xhigh'); // NOT downgraded
     } finally {

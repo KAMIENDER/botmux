@@ -1655,6 +1655,9 @@ async function ensureThread(startupDeadlineAtMs?: number): Promise<string> {
     // matching the API's fresh-spawn-only override semantics.
     ...(args.model && args.model.trim() ? { model: args.model.trim() } : {}),
     serviceName: 'botmux',
+    // IM-created conversations are user threads, just like desktop/TUI ones.
+    // Do not leave their origin unset in Codex's persisted thread metadata.
+    threadSource: 'user',
     developerInstructions: appDeveloperInstructions(args),
     ephemeral: false,
     experimentalRawEvents: false,

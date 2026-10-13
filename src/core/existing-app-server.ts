@@ -13,6 +13,17 @@ export interface ExistingAppServerConfig {
   endpoint: string;
 }
 
+/** A fresh session cannot launch while the bot is configured for shared adopt. */
+export class ExistingAppServerAdoptRequiredError extends Error {
+  constructor() {
+    super(
+      'this BotMux bot attaches only to an existing Codex App conversation; '
+      + 'use /adopt to select the thread before sending task input',
+    );
+    this.name = 'ExistingAppServerAdoptRequiredError';
+  }
+}
+
 function endpointError(label: string, message: string): Error {
   return new Error(`${label}: ${message}`);
 }
