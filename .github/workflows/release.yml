@@ -14,6 +14,7 @@ on:
 jobs:
   desktop:
     if: >-
+      github.repository == 'deepcoldy/botmux' &&
       github.actor == 'deepcoldy' &&
       github.triggering_actor == 'deepcoldy' &&
       (github.event_name == 'workflow_dispatch' || !contains(github.ref_name, '-'))
@@ -143,7 +144,7 @@ jobs:
   # after the tag push than before, which shrinks (does not remove) its
   # documented "master moved between tag creation and this fetch" race window.
   preflight:
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' && github.repository == 'deepcoldy/botmux'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -855,7 +856,7 @@ jobs:
     # binary that merely STARTS proves nothing — a libc mismatch fails at the moment
     # the native module loads. The bind-mount writeback (artifact readable back on
     # the host for upload-artifact) was verified with the same shape.
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' && github.repository == 'deepcoldy/botmux'
     strategy:
       fail-fast: false
       matrix:
@@ -1262,7 +1263,7 @@ jobs:
           done
 
   refresh-desktop-assets:
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && github.repository == 'deepcoldy/botmux'
     needs: desktop
     runs-on: ubuntu-latest
     permissions:

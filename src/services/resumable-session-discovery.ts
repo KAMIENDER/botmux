@@ -487,9 +487,10 @@ function rolloutResponseItemText(payload: Record<string, unknown>): string {
 
 /** Parse one Codex/TRAE rollout. `session_meta` carries the resume id + cwd.
  *  Title preference: the first `event_msg`/`user_message` (legacy format); when
- *  absent (Codex >=0.147), the first non-synthetic `response_item` role:user
- *  message — skipping the startup preamble and botmux-injected turns (which mark
- *  the whole session botmux-origin, same as the user_message path). Streamed
+ *  absent, the first non-synthetic user message in `response_item` (Codex
+ *  >=0.147) or `history_mutation` append items (paginated TRAE histories) —
+ *  skipping the startup preamble and botmux-injected turns (which mark the whole
+ *  session botmux-origin, same as the user_message path). Streamed
  *  line by line, stopping once id + cwd + title are found. */
 async function parseRolloutTranscript(
   path: string,
@@ -501,6 +502,17 @@ async function parseRolloutTranscript(
   // declared type.
   const acc: { id: string | null; cwd: string | null; title: string; fallbackTitle: string; botmux: boolean } = {
     id: null, cwd: null, title: '', fallbackTitle: '', botmux: false,
+  };
+  const recordUserMessage = (message: Record<string, unknown>): boolean => {
+    if (message.type !== 'message' || message.role !== 'user') return false;
+    const text = rolloutResponseItemText(message);
+    if (!text || isSyntheticPreamble(text)) return false;
+    if (isBotmuxInjected(text)) { acc.botmux = true; return true; }
+    if (!acc.fallbackTitle) acc.fallbackTitle = truncateTitle(text);
+    // The first meaningful user turn determines origin in both formats. Keep
+    // the same early stop so later botmux-resumed turns do not hide an external
+    // session, while botmux-origin sessions remain excluded from the picker.
+    return Boolean(acc.id && acc.cwd && acc.fallbackTitle);
   };
   let excluded = false;
   await forEachJsonLine(path, (rec) => {
@@ -516,22 +528,16 @@ async function parseRolloutTranscript(
     } else if (rec.type === 'event_msg' && payload?.type === 'user_message' && typeof payload.message === 'string') {
       if (isBotmuxInjected(payload.message)) { acc.botmux = true; return true; } // botmux-origin → drop
       if (!acc.title) acc.title = truncateTitle(payload.message);
-    } else if (rec.type === 'response_item' && payload?.type === 'message' && payload.role === 'user') {
-      // New-format (>=0.147) fallback title source. The first meaningful user
-      // turn determines origin, mirroring parseClaudeTranscript: a synthetic
-      // preamble is skipped, a botmux-wrapped turn drops the session, and the
-      // first raw turn becomes the fallback title (a later event_msg/user_message
-      // still wins when the rollout carries both).
-      const text = rolloutResponseItemText(payload);
-      if (!text) return; // empty / non-text content — not a title candidate
-      if (isSyntheticPreamble(text)) return; // startup preamble, not a user turn
-      if (isBotmuxInjected(text)) { acc.botmux = true; return true; } // botmux-origin → drop
-      if (!acc.fallbackTitle) acc.fallbackTitle = truncateTitle(text);
-      // 新格式（>=0.147）rollout 没有 event_msg/user_message，acc.title 永远
-      // 为空：不含 fallbackTitle 会扫满 MAX_HEAD_LINES_PER_FILE。首个真实用户
-      // 回合即定 origin（与 legacy 路径「id+cwd+title 齐即停扫」一致）；混合
-      // 格式文件中 legacy 条目按时间序在前，acc.title 会先命中早退，不受影响。
-      if (acc.id && acc.cwd && acc.fallbackTitle) return true;
+    } else if (rec.type === 'response_item' && payload) {
+      if (recordUserMessage(payload)) return true;
+    } else if (rec.type === 'history_mutation' && payload?.operation === 'append' && Array.isArray(payload.items)) {
+      // Paginated TraeX stores model-visible messages in append items instead
+      // of response_item. Reuse the same preamble and ownership guards; reset /
+      // replacement records and display projections are not new user turns.
+      for (const item of payload.items) {
+        const message = asRecord(item);
+        if (message && recordUserMessage(message)) return true;
+      }
     }
     return Boolean(acc.id && acc.cwd && acc.title);
   });

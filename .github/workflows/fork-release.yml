@@ -1,0 +1,68 @@
+name: Fork Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: New stable fork version (X.Y.Z, must use an unused tag)
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fork-release
+  cancel-in-progress: false
+
+jobs:
+  linux-x64:
+    if: github.repository == 'KAMIENDER/botmux' && github.ref_name == 'custom'
+    runs-on: ubuntu-24.04
+    env:
+      FORK_VERSION: ${{ inputs.version }}
+      GH_TOKEN: ${{ github.token }}
+      ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+      - name: Validate version and reject an existing tag
+        run: |
+          node --input-type=module <<'JS'
+          const value = process.env.FORK_VERSION;
+          if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(value ?? '')
+              || !value.split('.').every(v => Number.isSafeInteger(Number(v)))) {
+            throw new Error('Fork version must be a canonical X.Y.Z version');
+          }
+          JS
+          if git rev-parse --verify "refs/tags/v${FORK_VERSION}" >/dev/null 2>&1; then
+            echo "Refusing to reuse tag v${FORK_VERSION}."
+            exit 1
+          fi
+      - name: Build using the existing glibc 2.28 release pipeline
+        run: |
+          # The SG devbox runs glibc 2.28. Reuse upstream's baseline container;
+          # compiling node-pty directly on Ubuntu would raise the libc floor.
+          scripts/build-linux-glibc-baseline.sh \
+            bun-linux-x64 dist-bin/botmux-linux-x64 "$FORK_VERSION"
+          (cd dist-bin && sha256sum botmux-linux-x64 > botmux-linux-x64.sha256)
+      - name: Publish the fork binary and checksum
+        run: |
+          # gh creates the new tag at the exact source commit that was built.
+          # This workflow publishes GitHub assets only; it never publishes npm.
+          node --input-type=module <<'JS'
+          import { readFileSync, writeFileSync } from 'node:fs';
+          const config = JSON.parse(readFileSync('fork.json', 'utf8'));
+          writeFileSync('fork-release-notes.md',
+            `Botmux fork: ${config.repository}\n\nUpstream: ${config.upstream}\n` +
+            `Source commit: ${process.env.GITHUB_SHA}\n\nPlatform: Linux x64 glibc.\n`);
+          JS
+          gh release create "v${FORK_VERSION}" \
+            dist-bin/botmux-linux-x64 dist-bin/botmux-linux-x64.sha256 \
+            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "Botmux fork v${FORK_VERSION}" --notes-file fork-release-notes.md

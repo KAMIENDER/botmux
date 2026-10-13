@@ -112,6 +112,17 @@ function versionToBake() {
   return '0.0.0';
 }
 
+function repositoryToBake() {
+  const configPath = join(REPO_ROOT, 'fork.json');
+  const repository = existsSync(configPath)
+    ? JSON.parse(readFileSync(configPath, 'utf8')).repository
+    : 'deepcoldy/botmux';
+  if (typeof repository !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9_.-]+$/.test(repository)) {
+    throw new Error('Invalid release repository in fork.json');
+  }
+  return repository;
+}
+
 /** Resolve node-pty's compiled `pty.node` (+ macOS spawn-helper) for a target.
  *  On linux the local `build/Release/pty.node` is authoritative; darwin ships
  *  prebuilds under `prebuilds/<plat>-<arch>/`. */
@@ -233,7 +244,10 @@ async function buildOne({ target, out }) {
     // `bakedBinaryVersion()` (src/utils/install-info.ts), which is written so the
     // identifier is absent under Node — where the disk read still works — and only
     // this compiled path needs the constant.
-    define: { 'process.env.BOTMUX_BAKED_VERSION': JSON.stringify(baked) },
+    define: {
+      'process.env.BOTMUX_BAKED_VERSION': JSON.stringify(baked),
+      'process.env.BOTMUX_BAKED_RELEASE_REPO': JSON.stringify(repositoryToBake()),
+    },
     plugins: [makeNativeEmbedPlugin({ ptyNode, spawnHelper })],
   });
   if (!result.success) {

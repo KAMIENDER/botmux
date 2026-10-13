@@ -3,7 +3,7 @@
  * release notes accumulated since the running version. Powers the Settings
  * "version & update" card (manual update flow) — see dashboard.ts /api/update/*.
  *
- * The `latest` lookup MUST go through the registry npm is actually configured
+ * Official installs resolve `latest` through the registry npm is configured
  * to use (`npm config get registry`): the update button installs with the
  * owning package manager, which resolves through that same .npmrc family.
  * Checking the public registry while installing through a lagging mirror made
@@ -13,7 +13,9 @@
  * public: the rollback install pins the registry to public too
  * (`withGlobalInstallRegistry` in global-install.ts, rollback-only opt-in),
  * and the allow-list validated against this packument must match the source
- * that pin installs from.
+ * that pin installs from. Fork standalone builds instead use their baked
+ * GitHub repository for version discovery and downloads, with no fallback to
+ * the official package.
  *
  * Every network call is best-effort: timeout-bounded and returns null / [] on
  * failure (offline, rate-limited, registry hiccup) so the card degrades to
@@ -22,6 +24,7 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { githubAuthHeaders, type GithubAuthResolveOptions } from './github-auth.js';
 import { GITHUB_REPO } from './restart-report.js';
+import { USE_FORK_RELEASES } from './release-source.js';
 
 export interface ReleaseNote {
   /** Semver without leading 'v' (e.g. "2.85.1"). */
@@ -266,6 +269,44 @@ export interface FetchOpts {
   registry?: string;
 }
 
+/** Fork artifacts come from GitHub Releases, not the official npm package.
+ * Failure or an empty release list returns null; never fall back to upstream. */
+async function fetchForkReleaseVersion(tag: string, opts?: FetchOpts): Promise<string | null> {
+  const fetchImpl = opts?.fetchImpl ?? fetch;
+  const exact = parseVersion(tag);
+  const path = exact ? `/tags/v${tag.replace(/^v/i, '')}` : '?per_page=100';
+  try {
+    const res = await fetchImpl(`https://api.github.com/repos/${GITHUB_REPO}/releases${path}`, {
+      headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'botmux', ...githubAuthHeaders(opts?.auth) },
+      signal: AbortSignal.timeout(opts?.timeoutMs ?? 8_000),
+    });
+    if (!res.ok) return null;
+    const raw: unknown = await res.json();
+    const releases = exact ? [raw] : Array.isArray(raw) ? raw : [];
+    const versions: string[] = [];
+    for (const item of releases) {
+      if (!item || typeof item !== 'object') continue;
+      const release = item as Record<string, unknown>;
+      if (release.draft === true || typeof release.tag_name !== 'string') continue;
+      const version = release.tag_name.replace(/^v/i, '');
+      const parsed = parseVersion(version);
+      if (!parsed) continue;
+      if (exact) {
+        if (version === tag.replace(/^v/i, '')) versions.push(version);
+        continue;
+      }
+      if (tag === 'latest') {
+        if (release.prerelease !== true && parsed.pre.length === 0) versions.push(version);
+      } else if (tag === 'next' ? parsed.pre.length > 0 : parsed.pre[0] === tag) {
+        versions.push(version);
+      }
+    }
+    return versions.sort((a, b) => compareVersions(b, a))[0] ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export interface ParsedUpdateTarget {
   raw: string;
   tag: string;
@@ -327,12 +368,13 @@ export function parseUpdateTarget(rawInput?: string): ParsedUpdateTarget | null 
 
 /**
  * The dist-tag version (e.g. `latest`, `canary`, `beta`, `rc`, `next`) or specific
- * manifest version on the registry npm is configured to use.
+ * manifest version on the configured npm registry, or a fork's GitHub Release.
  * null on any failure.
  */
 export async function fetchDistTagVersion(tag: string = 'latest', opts?: FetchOpts): Promise<string | null> {
   const fetchImpl = opts?.fetchImpl ?? fetch;
   const cleanTag = tag.trim().replace(/^@/, '');
+  if (USE_FORK_RELEASES) return fetchForkReleaseVersion(cleanTag, opts);
   try {
     const base = await effectiveRegistryBase(opts?.registry);
     const res = await fetchImpl(registryDistTagUrl(base, cleanTag), {
@@ -423,6 +465,19 @@ export async function fetchRollbackVersions(
   current: string,
   opts?: FetchOpts & { max?: number },
 ): Promise<RollbackVersionsResult> {
+  if (USE_FORK_RELEASES) {
+    // Reuse the GitHub release parser and the existing rollback allow-list.
+    // Both lookup and binary download must name the same distribution.
+    const result = await fetchReleasesSince('0.0.0', { ...opts, max: 100 });
+    if (!result.ok) return { ok: false, versions: [] };
+    const versions: Record<string, { version: string }> = {};
+    const time: Record<string, string> = {};
+    for (const release of result.releases) {
+      versions[release.version] = { version: release.version };
+      if (release.publishedAt) time[release.version] = release.publishedAt;
+    }
+    return { ok: true, versions: selectRollbackVersions({ versions, time }, current, opts?.max ?? 3) };
+  }
   const fetchImpl = opts?.fetchImpl ?? fetch;
   try {
     const res = await fetchImpl(registryPackumentUrl(PUBLIC_REGISTRY), {

@@ -12,8 +12,9 @@ import { claimRestartIntentForReport } from '../services/restart-intent-store.js
 import { countActiveSessionsOnDisk, SessionStoreSqliteUnavailableError } from '../services/session-store.js';
 import { botmuxVersion } from '../utils/install-info.js';
 import { t, localeForBot, type Locale } from '../i18n/index.js';
+import { GITHUB_REPO } from './release-source.js';
 
-export const GITHUB_REPO = 'deepcoldy/botmux';
+export { GITHUB_REPO } from './release-source.js';
 
 export interface RestartReportInput {
   kind: RestartKind;

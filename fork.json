@@ -1,0 +1,7 @@
+{
+  "repository": "KAMIENDER/botmux",
+  "upstream": "deepcoldy/botmux",
+  "upstreamBranch": "master",
+  "customBranch": "custom",
+  "baseTag": "v3.42.0"
+}
