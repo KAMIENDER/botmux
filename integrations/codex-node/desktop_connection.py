@@ -90,7 +90,8 @@ def main():
         'enabled': bool(config.get('desktop_connection', {}).get('enabled')),
         'endpoint': url,
         'environment_matches': environment_url() == url,
-        'requires_desktop_restart': not args.status,
+        # Selecting a future transport is not evidence about the live desktop.
+        'scope': 'future_desktop_launches',
     }))
 
 if __name__ == '__main__':
