@@ -451,6 +451,8 @@ export const messages: Record<string, string> = {
   'cmd.repo.path_not_found': '❌ 找不到目录或项目：`{arg}`\n请传入绝对路径、相对路径，或 workingDir 下的一级项目名。',
   'cmd.repo.here_missing': '⚠️ 当前群聊还没有可复用的工作目录。请先在普通群启动一个会话或使用 /oncall bind 绑定目录。',
   'cmd.repo.selected_in_pending': '✅ 已选择 {name}',
+  'cmd.repo.start_failed': '❌ 启动会话失败。待处理消息已保留，请检查机器人启动配置后重试当前选择。',
+  'cmd.repo.existing_app_server_start_blocked': '❌ 当前机器人配置为只接入已有 Codex App 会话，无法通过选仓新建。\n如需直接新建，请管理员移除 existingAppServer 配置后重试当前选择；待处理消息已保留。',
   'cmd.repo.switched_to': '🔄 已切换到 {name}',
   'cmd.repo.warning_running': '⚠️ 当前会话已在运行中，切换仓库将关闭当前会话并创建新会话。\n如需切换，请在下方卡片中选择新仓库。',
   'cmd.repo.scan_dir_not_exist': '扫描目录不存在：{dirs}\n请检查 bots.json 中的 workingDir 是否指向有效目录。',

@@ -108,6 +108,7 @@ import { publishAttentionPatch, publishClosedSessionPatch, announcePendingRepoSe
 import { fallbackTurnId, rehomeReplyTargetState } from '../../core/reply-target.js';
 import { sendWorkerIpc } from '../../core/worker-ipc.js';
 import { validateWorkingDir } from '../../core/working-dir.js';
+import { ExistingAppServerAdoptRequiredError } from '../../core/existing-app-server.js';
 import type { DaemonToWorker, DisplayMode, TermActionKey } from '../../types.js';
 import { activeSessionKey, sessionKey, sessionAnchorId, frozenDisplayMode, markRepoCardConsumed, isActiveRepoCard, larkTransportEnabled } from '../../core/types.js';
 import type { DaemonSession } from '../../core/types.js';
@@ -709,11 +710,29 @@ export async function commitRepoSelection(
       // the user can retry this exact selection without losing the first turn.
       const pendingTurnId = ds.pendingTurnId ?? ds.session.pendingRepoSetup?.turnId;
       if (!emptyStart && pendingTurnId) await prepareTurn?.(ds, pendingTurnId);
-      forkWorker(
-        ds,
-        prompt,
-        !emptyStart && !pendingRawInput && pendingTurnId ? { turnId: pendingTurnId } : false,
-      );
+      try {
+        forkWorker(
+          ds,
+          prompt,
+          !emptyStart && !pendingRawInput && pendingTurnId ? { turnId: pendingTurnId } : false,
+        );
+      } catch (error) {
+        // The picker remains retryable and its opening messages stay buffered.
+        // The callback's outer error handler only logs, so report the refusal
+        // here even when Lark has already ACKed the button click.
+        try {
+          await sessionReply(rootId, t(
+            error instanceof ExistingAppServerAdoptRequiredError
+              ? 'cmd.repo.existing_app_server_start_blocked'
+              : 'cmd.repo.start_failed',
+            undefined,
+            locTarget,
+          ));
+        } catch (replyError) {
+          logger.warn(`[${tag(ds)}] Could not report repo-start failure: ${replyError instanceof Error ? replyError.message : String(replyError)}`);
+        }
+        throw error;
+      }
       ds.pendingRepo = false;
       // A queued activation owns the route through its adapter-level ACK. Every
       // buffer below was synchronously folded into prompt N and is safe to clear;

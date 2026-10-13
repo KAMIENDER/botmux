@@ -13,6 +13,7 @@
 2. `fork.json` 指定本仓库的发布来源，二进制构建时将其写入产物。
 3. 定制二进制的更新、版本选择、更新日志、回滚列表和下载均使用本仓库的 GitHub Releases；没有自己的 Release 时返回不可用，不回退到官方 npm。
 4. 官方发布工作流在 fork 中关闭；`Fork Release` 复用上游 glibc 2.28 构建流程，单独发布 Linux x64 二进制及 `botmux-linux-x64.sha256`，不发布 npm。
+5. Codex App 新建用户会话时传入 `threadSource: user`，保留正确的会话来源；选仓启动失败时向飞书返回提示，保留原消息和可重试的选仓卡。`existingAppServer` 的仅共享接入限制继续生效，直接新建模式应使用没有该限制的机器人配置。
 
 源代码运行时使用 `BOTMUX_RELEASE_REPO=KAMIENDER/botmux`；发布二进制已内置该来源，无需设置这个环境变量。当前 fork 的部署渠道仅支持独立二进制，不能用 `npm i -g botmux` 安装定制版。
 

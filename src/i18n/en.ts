@@ -452,6 +452,8 @@ export const messages: Record<string, string> = {
   'cmd.repo.path_not_found': '❌ No such directory or project: `{arg}`\nPass an absolute path, a relative path, or a first-level project name under workingDir.',
   'cmd.repo.here_missing': '⚠️ This chat has no current working directory to reuse. Start a normal chat session first, or bind one with /oncall bind.',
   'cmd.repo.selected_in_pending': '✅ Selected {name}',
+  'cmd.repo.start_failed': '❌ Session startup failed. Pending messages are retained. Check the bot launch configuration, then retry this selection.',
+  'cmd.repo.existing_app_server_start_blocked': '❌ This bot is configured to attach only to existing Codex App conversations and cannot start a new one from the repository picker.\nTo create one directly, ask an administrator to remove existingAppServer from the bot configuration, then retry this selection. Pending messages are retained.',
   'cmd.repo.switched_to': '🔄 Switched to {name}',
   'cmd.repo.warning_running': '⚠️ A session is already running. Switching repos will close it and start a new one.\nIf that\'s what you want, pick the new repo from the card below.',
   'cmd.repo.scan_dir_not_exist': 'Scan dirs do not exist: {dirs}\nCheck that workingDir in bots.json points to a valid directory.',

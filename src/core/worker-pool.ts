@@ -76,7 +76,7 @@ import {
 } from '../adapters/backend/mojo-types.js';
 import { sanitizePerBotEnv } from './per-bot-env.js';
 import { buildBotWorkerEnv } from './env-policy.js';
-import { normalizeExistingAppServerEndpoint } from './existing-app-server.js';
+import { ExistingAppServerAdoptRequiredError, normalizeExistingAppServerEndpoint } from './existing-app-server.js';
 import {
   isExistingAppServerSharedAdoptPersistedSession,
   isSharedAdoptPersistedSession,
@@ -12627,10 +12627,7 @@ export function forkWorker(
     && botCfg.cliId === 'codex'
     && ds.session.existingAppServerEndpoint === undefined
   ) {
-    throw new Error(
-      'this BotMux bot attaches only to an existing Codex App conversation; '
-      + 'use /adopt to select the thread before sending task input',
-    );
+    throw new ExistingAppServerAdoptRequiredError();
   }
   let existingAppServerEndpoint: string | undefined;
   if (ds.session.existingAppServerEndpoint !== undefined) {

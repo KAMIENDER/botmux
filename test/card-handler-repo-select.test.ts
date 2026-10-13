@@ -167,6 +167,7 @@ import { applyConfigField } from '../src/services/bot-config-store.js';
 import { deleteMessage } from '../src/im/lark/client.js';
 import { canOperate } from '../src/im/lark/event-dispatcher.js';
 import { sessionKey } from '../src/core/types.js';
+import { ExistingAppServerAdoptRequiredError } from '../src/core/existing-app-server.js';
 import type { DaemonSession } from '../src/core/types.js';
 import type { ProjectInfo } from '../src/services/project-scanner.js';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -959,7 +960,7 @@ describe('repo select card — plain switch', () => {
       pendingTurnId: 'om_buffered_turn',
       worker: null,
     });
-    const { deps } = makeDeps(ds);
+    const { deps, sessionReply } = makeDeps(ds);
     vi.mocked(forkWorker).mockImplementationOnce(() => { throw new Error('fork boom'); });
 
     await expect(
@@ -972,6 +973,7 @@ describe('repo select card — plain switch', () => {
     expect(ds.pendingFollowUps).toBe(pendingFollowUps);
     expect(ds.pendingTurnId).toBe('om_buffered_turn');
     expect(deleteMessage).not.toHaveBeenCalled();
+    expect(sessionReply).toHaveBeenCalledWith(ROOT_ID, expect.stringContaining('启动会话失败'), undefined, APP_ID);
 
     await handleCardAction(makeSelectEvent('repo_switch', '/repos/alpha'), deps, APP_ID);
 
@@ -981,6 +983,37 @@ describe('repo select card — plain switch', () => {
     expect(ds.pendingPrompt).toBeUndefined();
     expect(ds.pendingFollowUps).toBeUndefined();
     expect(ds.pendingTurnId).toBeUndefined();
+  });
+
+  it('reports shared-adopt configuration blocking a manual directory start without consuming the picker', async () => {
+    const ds = makeDs({ pendingRepo: true, pendingPrompt: 'queued task', worker: null });
+    const { deps, sessionReply } = makeDeps(ds);
+    const error = new ExistingAppServerAdoptRequiredError();
+    vi.mocked(forkWorker).mockImplementationOnce(() => { throw error; });
+
+    await expect(handleCardAction(makeManualEvent(tmpdir()), deps, APP_ID)).rejects.toBe(error);
+
+    expect(sessionReply).toHaveBeenCalledWith(ROOT_ID, expect.stringContaining('existingAppServer'), undefined, APP_ID);
+    expect(ds.pendingRepo).toBe(true);
+    expect(ds.pendingRepoCommitInFlight).toBe(false);
+    expect(ds.pendingPrompt).toBe('queued task');
+    expect(ds.repoCardMessageId).toBe('om_card');
+    expect(deleteMessage).not.toHaveBeenCalled();
+  });
+
+  it('preserves the startup error and queued input when delivering the failure notice also fails', async () => {
+    const ds = makeDs({ pendingRepo: true, pendingPrompt: 'queued task', worker: null });
+    const { deps, sessionReply } = makeDeps(ds);
+    const error = new Error('launch refused');
+    vi.mocked(forkWorker).mockImplementationOnce(() => { throw error; });
+    sessionReply.mockRejectedValueOnce(new Error('reply unavailable'));
+
+    await expect(handleCardAction(makeManualEvent(tmpdir()), deps, APP_ID)).rejects.toBe(error);
+
+    expect(ds.pendingRepo).toBe(true);
+    expect(ds.pendingRepoCommitInFlight).toBe(false);
+    expect(ds.pendingPrompt).toBe('queued task');
+    expect(ds.repoCardMessageId).toBe('om_card');
   });
 
   it('mid-session selection closes the old session and forks a fresh one', async () => {
