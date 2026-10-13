@@ -31,6 +31,8 @@
 
 `envPolicy.mode: "strict"` 不支持 `remote-runner`：BotMux 可以收窄本机 provider 子进程的环境，但无法证明 provider 背后的远端进程同样满足 strict 环境契约，因此启动会 fail closed。
 
+TRAE Remote SSH 的实验性原生会话适配见 [integrations/trae-native](../integrations/trae-native/README.md)。它使用现有协议和开发机用户服务，兼容性受 TRAE 内部接口版本限制。
+
 ## 传输与握手
 
 BotMux 启动一个 provider 子进程，通过 stdin 逐行写入命令，通过 stdout 逐行读取事件。每行都是一个完整 JSON 对象，必须携带：

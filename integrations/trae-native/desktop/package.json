@@ -1,0 +1,25 @@
+{
+  "name": "botmux-native-session-setup",
+  "displayName": "Botmux Native TRAE Setup",
+  "publisher": "botmux-custom",
+  "description": "Initialize the native TRAE backend on an SSH development host.",
+  "version": "0.1.0",
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "main": "./extension.cjs",
+  "extensionKind": [
+    "workspace"
+  ],
+  "activationEvents": [
+    "onCommand:botmux.traeNative.initialize"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "botmux.traeNative.initialize",
+        "title": "Botmux: Initialize Native TRAE Backend"
+      }
+    ]
+  }
+}
