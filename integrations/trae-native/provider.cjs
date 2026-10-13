@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 const readline = require('node:readline');
-const path = require('node:path');
+const {validateDirectory} = require('./workspace.cjs');
 const {NativeClient,privateJson} = require('./native-client.cjs');
 
 const protocol = 'botmux.remote-runner';
@@ -39,9 +39,7 @@ async function setup(command) {
     throw new Error('Cannot resume foreign or incomplete native state');
   }
   const cwd = previous?.providerState.cwd || command.cwd;
-  if (!path.isAbsolute(cwd || '') || !privateJson('runtime.json').workspaceFolders?.includes(cwd)) {
-    throw new Error('Open this workspace in TRAE Remote SSH and initialize the native backend first');
-  }
+  validateDirectory(cwd);
   client = new NativeClient({cwd,projectId:previous?.providerState.projectId});
   let native;
   if (previous) {

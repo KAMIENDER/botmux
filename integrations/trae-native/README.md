@@ -8,7 +8,8 @@
 
 - `provider.cjs`：Botmux 现有 [Remote Runner 协议](../../docs/remote-runner.md)的 JSONL provider。
 - `native-client.cjs`：通过已安装的 `@aha-kit/ipc` / `@aha-kit/rpc` 访问原生 agent；处理有限的桌面回调。
-- `desktop/`：自己编写的初始化扩展，通过 TRAE 命令 API 获取当前已登录账号和项目规则。
+- `workspace.cjs`：按会话目录自动读取当前项目和用户规则，限制回调的目录范围。
+- `desktop/`：自己编写的一次性账号初始化扩展，通过 TRAE 命令 API 获取当前登录信息和全局配置。
 - `capture-runtime.py` / `runtime.cjs` / `install.py`：记录原安装的启动参数，安装并保持用户服务。
 - `session-cli.cjs`：查看原生会话、检查状态、将已有原生会话接入 Botmux。
 
@@ -25,13 +26,7 @@
    ```
 
 2. 在 TRAE 的 Remote SSH IDE 窗口安装该 VSIX，运行命令 **Botmux: Initialize Native TRAE Backend**。这是显式初始化操作；扩展不会后台自动导出凭据。
-3. 默认只初始化当前工作区。要加入其它自己的目录，在开发机建立权限为 600 的 `~/.botmux/trae-native/workspaces.json` 后重新运行初始化命令：
-
-   ```json
-   {"folders":["/home/your-user/my_project","/home/your-user/my_project/botmux"]}
-   ```
-
-4. 找到当前用户原生 Remote SSH launcher 的精确 PID（node 参数包含 `index_trae.js --start-server`），记录已有安装：
+3. 找到当前用户原生 Remote SSH launcher 的精确 PID（node 参数包含 `index_trae.js --start-server`），记录已有安装：
 
    ```sh
    python3 integrations/trae-native/capture-runtime.py <launcher-pid>
@@ -41,7 +36,7 @@
 
    必须保留原来的 Machine ID、安装 PID/log/token 文件，桌面重连才能复用此服务。capture 脚本不会保存明文 token 启动参数，只保存已有 token 文件路径，并移除 Remote SSH 自动退出参数。
 
-5. 让未由 systemd 管理的原生 launcher 及其子进程完全退出后，再启动服务；不要在仍有原生数据库写进程时启动第二份实例。`runtime.cjs` 会拒绝重复 writer：
+4. 让未由 systemd 管理的原生 launcher 及其子进程完全退出后，再启动服务；不要在仍有原生数据库写进程时启动第二份实例。`runtime.cjs` 会拒绝重复 writer：
 
    ```sh
    systemctl --user enable --now botmux-trae-native.service
@@ -52,7 +47,7 @@
 
    要在退出 SSH 登录后保持用户服务运行，需要宿主用户启用 linger。初次交接原生进程应在维护窗口完成；这会暂时断开桌面 Remote SSH 连接。重新连接后应仍只有一个原生 ai-agent。
 
-运行凭据、动态配置和规则快照保存在 `~/.botmux/trae-native/`（目录 700、JSON 文件 600）。初始化使用当前账号已有 token，不扩大其有效期；过期后需刷新 TRAE 登录并再次初始化。不能用 TraeX 的 Git 登录凭据替代原生 TRAE 登录。
+账号初始化只需做一次；切换到新的项目目录不需要再次初始化。旧 `workspaces.json` / `runtime.workspaceFolders` 仅保留初始化时的观察信息，不再限制新会话。运行凭据、动态配置和全局配置快照保存在 `~/.botmux/trae-native/`（目录 700、JSON 文件 600）。初始化使用当前账号已有 token，不扩大其有效期；过期后需刷新 TRAE 登录并再次初始化。不能用 TraeX 的 Git 登录凭据替代原生 TRAE 登录。
 
 ## Botmux 配置
 
@@ -78,7 +73,7 @@
 
 新会话保留原来的 model / reasoningEffort；内置模型 ID 转小写传给 TRAE。已实际验证 `gpt-6.1-sol/high` 和 `GPT-5.6-Sol/xhigh`。其它组合由原生后端校验。
 
-新会话的 cwd 必须在初始化工作区列表里。创建时复用已有 SSH 任务的 remote authority，建立对应 Native Project，并注册 Session Workspace，才能在桌面相同项目里显示。Botmux 的 `remoteBackendState.agentThreadId` 就是该原生 ID。重连会验证账号和目录，保留 ID；rebuild 推进 generation。
+新会话接受当前用户可访问的、已存在的绝对目录。启动时自动准备该目录的规则上下文，复用该开发机已有 SSH 任务的 remote authority，建立对应 Native Project，并注册 Session Workspace；不要求提前在桌面打开这个项目。Botmux 的 `remoteBackendState.agentThreadId` 就是该原生 ID。重连会验证账号和目录，保留 ID；rebuild 推进 generation。
 
 ## 接入已有 TRAE 原生会话
 
@@ -89,7 +84,7 @@
 ~/.local/bin/botmux-trae-native adopt <native-session-id> --bot <app-id>
 ```
 
-`sessions` 当前显示最多 100 条。`adopt` 校验目标 Bot、账号和初始化目录，调用现有 `session create` 注册一个未启动的 Botmux 会话，再建立权限 600 的私有绑定，最后通过 `session send` 启动。provider 从第一轮就使用原来的原生 ID，不新建空原生任务。普通聊天中粘贴一个原生 ID不具有接入能力。
+`sessions` 当前显示最多 100 条。`adopt` 校验目标 Bot、账号和实际工作目录，调用现有 `session create` 注册一个未启动的 Botmux 会话，再建立权限 600 的私有绑定，最后通过 `session send` 启动。provider 从第一轮就使用原来的原生 ID，不新建空原生任务。普通聊天中粘贴一个原生 ID不具有接入能力。
 
 接入会追加一句“原生会话接入成功”的验证回复，不执行工具。输出提供 Botmux session ID / headless ID，后续可直接 `botmux session send` 续聊。若需要绑定到飞书，应另外使用 Botmux 现有绑定/发布流程。该 helper 不发送飞书消息。原生 ID 的绑定只由开发机宿主 helper 写入；resume 仍核验账号和工作区。
 
@@ -101,7 +96,7 @@
 - 允许两边接续同一会话；不要同时提交两轮。后端明确拒绝的请求不会自动重放。传输超时、接受后掉线等无法确认结果的情况会标记 ambiguous，并关闭该 provider 的写入能力。
 - 每轮 final 都核验持久历史中 reply_to_message_id 对应的已完成 assistant 回复，避免把另一客户端的完成事件当成本轮结果。周期性历史查询也能补回建立事件订阅前就已完成的回复。
 - 关闭 Botmux 会话使用原生 stop，再确认 `status:closed`；不删除原生历史。空闲 detach 保留原生会话，冷启动 resume 读取原 ID。Mac 断线不依赖 detach。
-- 当前桌面回调仅覆盖动态配置、初始化规则、有限目录读取、SSH workspace 注册和有限的终端环境。规则文件内容会重新读取；新增/删除规则文件需重新初始化元数据。
+- 当前桌面回调覆盖动态配置、自动发现规则、有限目录读取、SSH workspace 注册和有限的终端环境。每次规则请求重新扫描用户 `user_rules.md` / `user_rules/` 和当前项目 `.trae/rules/`；按全局开关导入 `AGENTS.md` / Claude 规则，文件请求读取该项目内的上级规则。新增、删除和修改规则不需重新初始化。全局开关仍来自账号初始化快照，修改它们后需重新初始化；旧快照缺少开关时使用已核对的 TRAE CN 3.4.2 默认值（AGENTS 开、Claude 关）。
 - 其它 VSCode 回调明确报 unsupported，不伪造工具成功。未验证或接入完整桌面 MCP、浏览器、审批 UI、Web 终端画面及 Botmux actor / execution 进程树身份桥接；不能把它们算作已支持。此改动也不保证原有工作流工具在原生 Shell 中具有相同身份能力。
 - 只把非敏感 Botmux 路由上下文传给原生 terminal contributed env；不注入或伪造 actor 身份、不暴露凭据。
 - native SDK 从唯一当前用户的原生 ai-agent 安装目录加载；出现两个 writer 就失败，不能猜选其中一个。
@@ -123,3 +118,4 @@ TRAE 升级可能更换安装路径、SDK 或内部接口。先暂停目标 Bot�
 - Botmux 真正的 `session start --headless` 执行原生 Shell，返回 `BOTMUX_NATIVE_OK`，持久状态保存原生会话 ID。
 - 宿主 helper 接入已有原生任务，Botmux 读到桌面之前的英文标记并返回；只重启目标 Bot 后再次续聊仍保留原生 ID 和上下文。
 - Botmux 关闭验证会话成功，原生历史仍可读取。
+- 在未加入初始化目录列表的 `/home/hejiadong.1024/project/ai_review_self_iteration` 中，真实 headless 运行自动创建原生会话并返回 `AUTO_WORKSPACE_OK`；没有手动打开或初始化该项目。此项验证没有执行工具或业务任务。

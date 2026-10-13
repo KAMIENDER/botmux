@@ -6,6 +6,7 @@ const os = require('node:os');
 const crypto = require('node:crypto');
 const {execFile} = require('node:child_process');
 const {NativeClient,privateJson,discover} = require('./native-client.cjs');
+const {validateDirectory} = require('./workspace.cjs');
 const directory = path.join(os.homedir(),'.botmux','trae-native');
 
 function botmux(args) {
@@ -27,7 +28,7 @@ async function main() {
   if (operation === 'doctor') {
     const native=discover(),runtime=privateJson('runtime.json'),auth=privateJson('auth.json');
     console.log(JSON.stringify({nativePid:native.pid,installation:native.root,
-      initializedWorkspaces:runtime.workspaceFolders,expiresAt:auth.expiresAt},null,2));
+      initializedWorkspaces:runtime.workspaceFolders,automaticWorkspaces:true,expiresAt:auth.expiresAt},null,2));
     return;
   }
   const client = new NativeClient();
@@ -48,10 +49,10 @@ async function main() {
       throw new Error('Specify the exact native TRAE bot app ID with --bot');
     }
     const native = await client.request('lite','get_chat_session',{chat_session_id:id},id);
-    if (native.user_id !== privateJson('auth.json').userInfo.user_id
-        || !privateJson('runtime.json').workspaceFolders?.includes(native.main_folder)) {
-      throw new Error('Native session is outside the initialized account/workspace');
+    if (native.user_id !== privateJson('auth.json').userInfo.user_id) {
+      throw new Error('Native session belongs to another account');
     }
+    validateDirectory(native.main_folder);
     client.close();
     // The existing create API only registers metadata. Bind its generated ID
     // before the first send so provider start adopts the original native ID.

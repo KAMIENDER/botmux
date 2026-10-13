@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const crypto = require('node:crypto');
+const {NativeWorkspace} = require('./workspace.cjs');
 
 const home = os.homedir();
 const configDir = path.join(home, '.botmux', 'trae-native');
@@ -65,23 +66,10 @@ function unwrap(packet) {
   return value;
 }
 
-function refreshRules(response) {
-  if (response?.code !== 0 || !Array.isArray(response.data?.rules) || !response.data.isComplete) {
-    throw new Error('Native rule snapshot is unavailable or incomplete');
-  }
-  return {...response, data: {...response.data, rules: response.data.rules.map(rule => {
-    // Keep TRAE's matching metadata, but read the current file so edits are honored.
-    const file = rule.filePath.startsWith('file:') ? require('node:url').fileURLToPath(rule.filePath) : rule.filePath;
-    const content = fs.readFileSync(file, 'utf8');
-    if (Buffer.byteLength(content) > 1536 * 1024) throw new Error('Rule file exceeds native limit');
-    return {...rule, content};
-  })}};
-}
-
 function listFolder(args, folders) {
   const base = fs.realpathSync(args.path);
   if (!folders.some(x => base === fs.realpathSync(x) || base.startsWith(fs.realpathSync(x) + '/'))) {
-    throw new Error('Folder is outside the initialized workspace');
+    throw new Error('Folder is outside this session workspace');
   }
   const depth = Math.min(Math.max(Number(args.maxDepth) || 1, 1), 5);
   const limit = Math.min(Math.max(Number(args.maxResults) || 100, 1), 500);
@@ -110,6 +98,7 @@ class NativeClient {
     this.native = discover();
     this.runtime = privateJson('runtime.json');
     this.cwd = cwd;
+    this.workspace = cwd ? new NativeWorkspace(cwd,this.native.root) : undefined;
     this.projectId = projectId;
     this.onUnsupported = onUnsupported;
     this.workspaces = new Map();
@@ -140,19 +129,27 @@ class NativeClient {
         case 'icube.common.commands.tooling.registerSessionWorkspace': {
           const binding = args[0]; const uri = new URL(binding.workspaceUri);
           const folder = decodeURIComponent(uri.pathname);
-          if (!binding.sessionId || uri.protocol !== 'vscode-remote:' || !decodeURIComponent(uri.hostname).startsWith('ssh-remote+') || !runtime.workspaceFolders?.includes(folder)) {
+          if (!binding.sessionId || uri.protocol !== 'vscode-remote:' || !decodeURIComponent(uri.hostname).startsWith('ssh-remote+') || !this.workspace?.matchesFolder(folder)) {
             throw new Error('Uninitialized remote workspace');
           }
           this.workspaces.set(binding.sessionId, binding.workspaceUri);
           value = true; break;
         }
-        case 'icube.common.commands.tooling.getConfigurationValue':
-          if (!Object.hasOwn(runtime.configuration || {}, args[0]?.key)) throw new Error('Unknown native configuration key');
-          value = runtime.configuration[args[0].key]; break;
+        case 'icube.common.commands.tooling.getConfigurationValue': {
+          const key = args[0]?.key;
+          // Earlier bootstrap snapshots predate these two globally scoped keys.
+          // Their defaults are pinned to the installed TRAE 3.4.2 schema.
+          const defaults = {'AI.rules.importAgentsMd':true,'AI.rules.importClaudeMd':false};
+          if (Object.hasOwn(runtime.configuration || {}, key)) value = runtime.configuration[key];
+          else if (Object.hasOwn(defaults,key)) value = {code:0,data:defaults[key]};
+          else throw new Error('Unknown native configuration key');
+          break;
+        }
         case 'icube.common.commands.tooling.getRulesDetails':
-          value = refreshRules(runtime.rules?.[args[0]?.targetFolderPath]?.[args[0]?.scope]); break;
+          if (!this.workspace) throw new Error('Native session has no workspace');
+          value = this.workspace.rules(args[0],runtime); break;
         case 'icube.common.commands.tooling.listFolder':
-          value = listFolder(args[0], runtime.workspaceFolders || []); break;
+          value = listFolder(args[0], this.workspace ? [this.workspace.cwd] : []); break;
         case 'icube.common.commands.tooling.getTerminalContributedEnv':
           value = {code:0,data:{env:Object.fromEntries([
             'PATH','BOTMUX_SESSION_ID','BOTMUX_CHAT_ID','BOTMUX_CHAT_TYPE','BOTMUX_LARK_APP_ID',

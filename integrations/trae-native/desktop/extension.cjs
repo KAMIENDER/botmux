@@ -59,7 +59,7 @@ function activate(context) {
       } catch (error) {if (error.code !== 'ENOENT') throw error;}
       const tooling = name => 'icube.common.commands.tooling.' + name;
       const configuration = {};
-      for (const key of ['AI.skills.enableAgentsDir', 'AI.skills.enablePeerProductSkills']) {
+      for (const key of ['AI.skills.enableAgentsDir', 'AI.skills.enablePeerProductSkills', 'AI.rules.importAgentsMd', 'AI.rules.importClaudeMd']) {
         configuration[key] = await vscode.commands.executeCommand(tooling('getConfigurationValue'), {key});
       }
       const rules = {};
