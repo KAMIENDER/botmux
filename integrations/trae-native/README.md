@@ -74,6 +74,8 @@
 
 用现有 `botmux stop-bot <app-id>` / `botmux start-bot <app-id>` 只重启该 Bot。其它 Bot 无需重启。
 
+安装脚本还会在 `~/.local/bin/` 没有标准入口时，创建 `botmux-remote-runner` → `botmux-trae-native` 的链接。后台 CLI 列表只检测默认程序名，忽略单个 Bot 的 `cliPathOverride`；此入口使检测对应到实际已安装的原生 provider，避免误报“未安装”。已有其它 Remote Runner 入口时保留它，不覆盖；目标 Bot 仍使用显式路径。daemon 的 PATH 需要包含 `~/.local/bin`。
+
 新会话保留原来的 model / reasoningEffort；内置模型 ID 转小写传给 TRAE。已实际验证 `gpt-6.1-sol/high` 和 `GPT-5.6-Sol/xhigh`。其它组合由原生后端校验。
 
 新会话的 cwd 必须在初始化工作区列表里。创建时复用已有 SSH 任务的 remote authority，建立对应 Native Project，并注册 Session Workspace，才能在桌面相同项目里显示。Botmux 的 `remoteBackendState.agentThreadId` 就是该原生 ID。重连会验证账号和目录，保留 ID；rebuild 推进 generation。

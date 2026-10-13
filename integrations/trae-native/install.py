@@ -32,4 +32,14 @@ bin_dir.mkdir(parents=True,exist_ok=True)
 entry = bin_dir / 'botmux-trae-native'
 entry.write_text(wrapper)
 os.chmod(str(entry),0o755)
+# Dashboard CLI options probe the adapter's standard command, not each Bot's
+# cliPathOverride. Install this provider under that command too, so the default
+# probe checks a real executable. Never replace another provider's entrypoint.
+default_entry = bin_dir / 'botmux-remote-runner'
+try:
+    default_entry.symlink_to(entry.name)
+    print('Installed standard Remote Runner entrypoint')
+except FileExistsError:
+    if not (default_entry.is_symlink() and default_entry.resolve() == entry.resolve()):
+        print('Preserved existing Remote Runner entrypoint; use cliPathOverride for TRAE')
 print('Installed entrypoint and service definition; reload systemd to apply')
