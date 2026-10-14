@@ -10002,10 +10002,17 @@ function parkCrashDiagnosticTerminal(code: number | null, signal: string | null)
  *  the ask-hook / CoCo picker paths (driveCocoPicker, handleTuiKeys); cleared
  *  when the prompt resolves or a Lark/terminal input overrides it. */
 let tuiPromptBlocking = false;
+// Provider-owned background work affects the UI, not input admission or the
+// exact terminal/receipt for the last Botmux message.
+let nativeSessionBusy = false;
 
 /** One composed status projection shared by the immediate screen path,
  * periodic text updates, and screenshot uploads. */
 function projectedRuntimeScreenStatus(): RuntimeScreenStatus {
+  if (nativeSessionBusy
+      && (effectiveBackendType === 'remote-runner' || lastInitConfig?.cliId === 'codex-app')) {
+    return codexAppLivenessStatus('working');
+  }
   return codexAppLivenessStatus(projectRuntimeScreenStatus({
     promptReady: isPromptReady,
     analyzing: false,
@@ -11651,6 +11658,10 @@ async function handleTrustedCodexAppMarker(
         queueMicrotask(() => markPromptReady());
       }
     }
+    // Authenticated native busy includes desktop/Goal work outside the last
+    // Botmux-owned message. Preserve turn receipts while projecting that work.
+    nativeSessionBusy = state.busy;
+    if (state.busy) publishScreenStatus('working', { force: true });
     return true;
   }
 
@@ -19882,6 +19893,13 @@ async function spawnCli(
     if (backend !== observedBackend) return;
     onPtyData(data);
   });
+  observedBackend.onSessionActivity?.((busy) => {
+    if (backend !== observedBackend || fatalWorkerErrorPending) return;
+    if (nativeSessionBusy === busy) return;
+    nativeSessionBusy = busy;
+    const status = projectedRuntimeScreenStatus();
+    if (status === 'working' || status === 'idle') publishScreenStatus(status, { force: true });
+  });
   if (observedBackend instanceof HerdrBackend) {
     const transcriptSettle = createTranscriptTerminalSettle({ awaitingTerminal: bridgeHeadTurnAwaitingTerminal });
     const promptReadyEdgesAtSpawn = promptReadyEdges;
@@ -19943,6 +19961,7 @@ async function spawnCli(
     if (backend !== observedBackend) return;
     log(`${cliName()} task finished — re-arming prompt-ready for queued follow-ups`);
     markPromptReady();
+    if (nativeSessionBusy) publishScreenStatus('working', { force: true });
   });
   // Headless final-answer bridge: deliver the turn's answer to the
   // thread when the agent produced one but never called `botmux send`. Same
@@ -20454,6 +20473,7 @@ function killCli(opts: {
    * this worker's watcher but leave the tree/mountpoints for that replacement. */
   preserveSandbox?: boolean;
 } = {}): void {
+  nativeSessionBusy = false;
   // Invalidate an in-flight async spawn before any other teardown hook runs. The
   // remaining cleanup is synchronous today, but generation ownership must not
   // depend on that implementation detail.
@@ -22858,6 +22878,11 @@ function workerIpcPayload(msg: WorkerToDaemon): WorkerToDaemon {
 }
 
 function send(msg: WorkerToDaemon): void {
+  if (msg.type === 'screen_update' && msg.status === 'idle'
+      && (effectiveBackendType === 'remote-runner' || lastInitConfig?.cliId === 'codex-app')
+      && nativeSessionBusy) {
+    msg = { ...msg, status: codexAppLivenessStatus('working') };
+  }
   if (closeRequested && msg.type === 'final_output') {
     log('Dropped final_output after close fence');
     return;

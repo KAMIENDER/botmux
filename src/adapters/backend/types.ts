@@ -212,6 +212,9 @@ export interface SessionBackend {
    * Optional — local backends never implement it.
    */
   onTaskDone?(cb: () => void): void;
+  /** Native session activity may continue after this host's own turn finishes.
+   * This updates presentation only; it is not a turn completion/receipt. */
+  onSessionActivity?(cb: (busy: boolean) => void): void;
   /**
    * Turn final answer — headless backends (Mojo) that synthesise their screen
    * from an event stream also know, exactly, which part of that stream is the

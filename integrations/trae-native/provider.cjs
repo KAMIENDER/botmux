@@ -7,7 +7,7 @@ const {NativeClient,privateJson} = require('./native-client.cjs');
 const protocol = 'botmux.remote-runner';
 const version = 1;
 const provider = 'trae-native';
-const capabilities = ['start','resume','turn','cancel','detach','reattach','status','concurrent_turns'];
+const capabilities = ['start','resume','turn','cancel','detach','reattach','status','concurrent_turns','session_activity'];
 let client, state, status = 'starting', unknownAcceptance = false;
 const activeTurns = new Map(), unsettledMessageIds = new Set();
 const emit = event => process.stdout.write(JSON.stringify({protocol,version,...event}) + '\n');
@@ -284,7 +284,18 @@ async function handle(command) {
       await recoverSettledTurn();
       if (unknownAcceptance || unsettledMessageIds.size) throw new Error('Native outcome is still unknown');
       status = 'ready';emit({type:'status',requestId:command.requestId,status,state});break;
-    case 'status':emit({type:'status',requestId:command.requestId,status,state});break;
+    case 'status': {
+      let observedStatus = status;
+      if (state && ['ready','busy'].includes(status)) {
+        const native = await client.request('lite','get_chat_session',{
+          chat_session_id:state.agentThreadId,
+        },state.agentThreadId);
+        // Native status 3 is running, including autonomous Goal turns that
+        // have no Botmux-owned input. A final reply is not session-level idle.
+        observedStatus = activeTurns.size || native.status === 3 ? 'busy' : 'ready';
+      }
+      emit({type:'status',requestId:command.requestId,status:observedStatus,state});break;
+    }
     default:throw new Error('Unsupported runner command');
   }
 }

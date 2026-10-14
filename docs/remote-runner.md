@@ -88,6 +88,11 @@ BotMux 会发送 `reattach`，且只有收到同一 `requestId` 的 `status: rea
 底层运行时明确支持时使用；缺省时保持 provider 自身默认。三项都是 v1 additive
 字段，旧 provider 可以忽略。
 
+可选 `session_activity` capability 表示 `status` 可观察整个原生会话的活动，
+包括桌面客户端或后台 Goal 发起的工作。BotMux 每 5 秒查询一次，以 `busy` / `ready`
+更新会话展示；它不完成任何 turn、不改变输入回执，也不把活动状态当成输入门禁。
+未声明此能力的 provider 保持既有行为。
+
 Remote Runner 的 reasoning 选择使用 BotMux 通用的 `low|medium|high|xhigh|max|ultra`
 词表，不套用某个本地 CLI 的模型表；provider 负责接受、忽略或用结构化 `failure` 拒绝不支持的组合。
 

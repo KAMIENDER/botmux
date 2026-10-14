@@ -126,6 +126,9 @@ export class RemoteRunnerBackend implements SessionBackend {
   private screenResyncCb: ((snapshot: string) => void) | null = null;
   private exitCb: ((code: number | null, signal: string | null) => void) | null = null;
   private taskDoneCb: (() => void) | null = null;
+  private sessionActivityCb: ((busy: boolean) => void) | null = null;
+  private sessionActivityTimer: NodeJS.Timeout | undefined;
+  private sessionActivityPollPending = false;
   private turnFinalCb: ((text: string, turnId?: string) => void) | null = null;
   private turnFailureCb: ((failure: BackendTurnFailure) => void) | null = null;
   private outboundMessageCb: ((message: RemoteRunnerOutboundMessage) => Promise<RemoteRunnerOutboundMessageResult>) | null = null;
@@ -172,6 +175,7 @@ export class RemoteRunnerBackend implements SessionBackend {
     child.stdout.on('data', chunk => this.consumeStdout(String(chunk)));
     child.on('error', error => this.failProtocol(`provider process error: ${error.message}`));
     child.on('exit', (code, signal) => {
+      clearInterval(this.sessionActivityTimer);
       this.child = null;
       this.ready = false;
       const expected = this.killed || this.closePrepared || this.shutdownDetaching;
@@ -343,6 +347,7 @@ export class RemoteRunnerBackend implements SessionBackend {
   }
   onExit(cb: (code: number | null, signal: string | null) => void): void { this.exitCb = cb; }
   onTaskDone(cb: () => void): void { this.taskDoneCb = cb; }
+  onSessionActivity(cb: (busy: boolean) => void): void { this.sessionActivityCb = cb; }
   onTurnFinal(cb: (text: string, turnId?: string) => void): void { this.turnFinalCb = cb; }
   onTurnFailure(cb: (failure: BackendTurnFailure) => void): void { this.turnFailureCb = cb; }
   onOutboundMessage(
@@ -375,6 +380,7 @@ export class RemoteRunnerBackend implements SessionBackend {
 
   kill(): void {
     if (this.killed) return;
+    clearInterval(this.sessionActivityTimer);
     this.killed = true;
     this.ready = false;
     this.child?.kill('SIGTERM');
@@ -550,7 +556,35 @@ export class RemoteRunnerBackend implements SessionBackend {
     }
     if (!this.applyState(ready.state)) throw new Error('remote runner ready state is invalid');
     this.ready = true;
+    if (this.providerCapabilities.has('session_activity')) {
+      await this.pollSessionActivity();
+      if (!this.ready || this.killed || !this.child) throw new Error('Provider exited during session activity observation');
+      this.sessionActivityTimer = setInterval(() => { void this.pollSessionActivity(); }, 5000);
+    }
     this.readyCb?.();
+  }
+
+  private async pollSessionActivity(): Promise<void> {
+    if (!this.ready || this.killed || this.closing || this.shutdownDetaching
+        || this.sessionActivityPollPending) return;
+    this.sessionActivityPollPending = true;
+    const generation = this.state?.generation;
+    try {
+      const event = await this.request(
+        remoteRunnerCommand('status', { requestId: this.requestId('session-activity') }),
+        candidate => candidate.type === 'status',
+        this.operationTimeoutMs,
+      );
+      if (!this.killed && !this.closing && !this.shutdownDetaching
+          && this.state?.generation === generation && event.type === 'status'
+          && (event.status === 'busy' || event.status === 'ready')) {
+        this.sessionActivityCb?.(event.status === 'busy');
+      }
+    } catch {
+      // Missing observation is never proof of idle or a completed task.
+    } finally {
+      this.sessionActivityPollPending = false;
+    }
   }
 
   private consumeStdout(chunk: string): void {
