@@ -7,13 +7,43 @@ const {NativeClient,privateJson} = require('./native-client.cjs');
 const protocol = 'botmux.remote-runner';
 const version = 1;
 const provider = 'trae-native';
-const capabilities = ['start','resume','turn','cancel','detach','reattach','status'];
-let client, state, status = 'starting', activeTurn;
+const capabilities = ['start','resume','turn','cancel','detach','reattach','status','concurrent_turns'];
+let client, state, status = 'starting', unknownAcceptance = false;
+const activeTurns = new Map(), unsettledMessageIds = new Set();
 const emit = event => process.stdout.write(JSON.stringify({protocol,version,...event}) + '\n');
 const items = data => data?.items || data?.sessions || data?.projects || [];
 const fail = (command, message, ambiguous = false) => emit({type:'failure', requestId:command?.requestId,
   turnId:command?.turnId,code:ambiguous ? 'native_outcome_unknown' : 'native_adapter_error',
   message,status:ambiguous ? 'ambiguous' : 'failed',retryable:false});
+
+async function nativeReply(sessionId, messageId) {
+  const history = await client.request('lite','get_messages',{chat_session_id:sessionId,page_size:100},sessionId);
+  return items(history).findLast(x => x.role === 'assistant' && x.reply_to_message_id === messageId);
+}
+
+function terminalReply(reply) {
+  return ['completed','canceled','cancelled'].includes(reply?.status);
+}
+
+function publishNativeFinal(command, reply) {
+  const content = typeof reply.content === 'string' ? JSON.parse(reply.content) : reply.content;
+  const summary = content?.messages?.findLast(x => x.plan_item?.tool_call_info?.name === 'finish')
+    ?.plan_item.tool_call_info.params?.summary;
+  if (!summary) throw new Error('Native turn completed without a text summary');
+  unsettledMessageIds.delete(reply.reply_to_message_id);
+  status = unknownAcceptance || unsettledMessageIds.size ? 'error' : activeTurns.size > 1 ? 'busy' : 'ready';
+  emit({type:'final',turnId:command.turnId,content:summary,state});
+}
+
+async function recoverSettledTurn() {
+  if (status !== 'error' || !unsettledMessageIds.size) return;
+  // A new user input may proceed after every exact uncertain reply is durably
+  // terminal. Never replay the old request or unlock on session-level status.
+  for (const id of unsettledMessageIds) {
+    if (terminalReply(await nativeReply(state.agentThreadId,id))) unsettledMessageIds.delete(id);
+  }
+  if (!unknownAcceptance && !unsettledMessageIds.size) status = activeTurns.size ? 'busy' : 'ready';
+}
 
 async function pageAll(method, fields = {}) {
   let token;
@@ -31,7 +61,7 @@ async function pageAll(method, fields = {}) {
 }
 
 async function setup(command) {
-  if (activeTurn) throw new Error('A native turn is already running');
+  if (activeTurns.size) throw new Error('A native turn is already running');
   client?.close();
   const previous = command.type === 'resume' ? command.state : undefined;
   if (previous && (previous.provider !== provider || previous.version !== version
@@ -98,22 +128,27 @@ function modelParameters() {
 }
 
 async function runTurn(command) {
-  let accepted = false, sendAttempted = false, rejected = false, sent, stream, historyTimer, finished = false;
+  let accepted = false, sendAttempted = false, rejected = false, sent, stream, historyTimer, deadlineTimer, finished = false;
+  let verifiedReply;
   let sid = state.agentThreadId;
-  activeTurn = command;
+  const predecessors = [...activeTurns.values()];
+  activeTurns.set(command.turnId,command);
   let settleAcceptance;
   command.acceptanceSettled = new Promise(resolve => {settleAcceptance = resolve;});
   status = 'busy';
   command.cancelled = false;
-  emit({type:'status',requestId:command.requestId,status,state});
   try {
+    await Promise.all(predecessors.map(turn => turn.acceptanceSettled));
+    if (status === 'closed' || unknownAcceptance || unsettledMessageIds.size) throw new Error('Prior native input has not settled');
     // Never replay an accepted request after a timeout: the backend may have
     // executed tools even when the transport lost its acknowledgement.
     const content = command.content;
     sendAttempted = true;
     sent = await client.request('lite','send_message',{
       chat_session_id:sid,content:[{type:'text',text_content:content}],
-      ...modelParameters(),workspace_folders:[state.providerState.cwd],
+      // Native send_message appends into its active inbox unless forced new.
+      // Its accepted/message_id/from_append_msg receipt is our delivery proof.
+      force_new_turn:false,...modelParameters(),workspace_folders:[state.providerState.cwd],
     },sid);
     if (sent?.accepted === false) {
       rejected = true;
@@ -122,26 +157,31 @@ async function runTurn(command) {
     if (sent?.accepted !== true || !sent.message_id) throw new Error('Native acceptance could not be verified');
     accepted = true;
     settleAcceptance();
-    let finalSummary = '';
+    emit({type:'status',requestId:command.requestId,status:'busy',state});
     const thoughts = new Map();
     const done = new Promise((resolve,reject) => {
-      const timer = setTimeout(() => reject(new Error('Native turn exceeded adapter deadline')), 60 * 60 * 1000);
+      deadlineTimer = setTimeout(() => reject(new Error('Native turn exceeded adapter deadline')), 60 * 60 * 1000);
       let checking = false;
-      historyTimer = setInterval(async () => {
-        if (checking) return;
+      const checkHistory = async () => {
+        if (checking || finished) return;
         checking = true;
         try {
-          const history = await client.request('lite','get_messages',{chat_session_id:sid,page_size:100},sid);
-          const reply = items(history).findLast(x => x.role === 'assistant' && x.reply_to_message_id === sent.message_id);
-          if (reply?.status === 'completed') {clearTimeout(timer);resolve();}
-        } catch (error) {clearTimeout(timer);reject(error);}
+          const reply = await nativeReply(sid,sent.message_id);
+          if (terminalReply(reply)) {
+            verifiedReply = reply;
+            clearTimeout(deadlineTimer);
+            if (reply.status === 'completed') resolve();
+            else reject(new Error('Native turn was cancelled'));
+          }
+        } catch (error) {clearTimeout(deadlineTimer);reject(error);}
         finally {checking = false;}
-      },10000);
+      };
+      historyTimer = setInterval(checkHistory,10000);
       client.subscribe(sid,event => {
         if (finished) return;
         const payload = event?.payload;
         if (payload?.reply_to_message_id && payload.reply_to_message_id !== sent.message_id) return;
-        if (event?.event === 'adapter_error') {clearTimeout(timer);reject(new Error('Native stream disconnected'));return;}
+        if (event?.event === 'adapter_error') {void checkHistory();return;}
         if (event?.event === 'plan_item') {
           if (payload?.thought) {
             const previous = thoughts.get(payload.id) || '';
@@ -149,48 +189,62 @@ async function runTurn(command) {
             thoughts.set(payload.id,payload.thought);
             if (delta) emit({type:'progress',turnId:command.turnId,content:delta});
           }
-          if (payload?.tool_call_info?.name === 'finish') finalSummary = payload.tool_call_info.params?.summary || '';
         }
-        if (event?.event === 'done') {
-          clearTimeout(timer);
-          if (payload?.status !== 'completed') reject(new Error('Native turn did not complete'));
-          else resolve();
-        }
-        if (event?.event === 'error') {clearTimeout(timer);reject(new Error('Native execution failed'));}
+        // done/error can belong to another frontend, arrive before persistence,
+        // or describe a normal cancellation. Only our persisted reply settles
+        // this turn; polling also survives a lost or closed event subscription.
+        if (event?.event === 'done' || event?.event === 'error') void checkHistory();
       }).then(value => {
         if (finished) {value.dispose?.();return;}
         stream=value;
-        stream.on('end',() => {clearTimeout(timer);reject(new Error('Native stream ended before a verified completion'));});},error => {clearTimeout(timer);reject(error);});
+        stream.on('end',() => {void checkHistory();});},() => {void checkHistory();});
     });
     await done;
     // Both frontends can subscribe to this session. Trust only the persisted
     // assistant reply to our exact message ID, never another client's finish.
-    const history = await client.request('lite','get_messages',{chat_session_id:sid,page_size:100},sid);
-    const assistant = items(history).findLast(x => x.role === 'assistant' && x.reply_to_message_id === sent.message_id);
-    if (assistant?.status !== 'completed') throw new Error('Cannot verify the native reply for this turn');
-    const verified = typeof assistant.content === 'string' ? JSON.parse(assistant.content) : assistant.content;
-    finalSummary = verified?.messages?.findLast(x => x.plan_item?.tool_call_info?.name === 'finish')
-      ?.plan_item.tool_call_info.params?.summary || '';
-    if (!finalSummary) throw new Error('Native turn completed without a text summary');
-    status = 'ready';
-    emit({type:'final',turnId:command.turnId,content:finalSummary,state});
+    verifiedReply ||= await nativeReply(sid,sent.message_id);
+    if (verifiedReply?.status !== 'completed') throw new Error('Cannot verify the native reply for this turn');
+    publishNativeFinal(command,verifiedReply);
   } catch (error) {
     settleAcceptance();
     if (command.cancelSettled) await command.cancelSettled;
+    if (!command.cancelled && accepted && !terminalReply(verifiedReply)) {
+      // A transport failure alone does not establish execution outcome. One
+      // final read can recover a completed/cancelled reply without replaying it.
+      try {verifiedReply = await nativeReply(sid,sent.message_id);} catch {}
+    }
     if (command.cancelled) {
       emit({type:'failure',requestId:command.requestId,turnId:command.turnId,
         code:'native_cancelled',message:'Native turn cancelled',status:'cancelled',retryable:false});
+    } else if (terminalReply(verifiedReply)) {
+      if (verifiedReply.status === 'completed') {
+        try {publishNativeFinal(command,verifiedReply);return;}
+        catch (replyError) {error=replyError;}
+      }
+      const cancelled = verifiedReply.status !== 'completed';
+      unsettledMessageIds.delete(sent.message_id);
+      status = unknownAcceptance || unsettledMessageIds.size ? 'error' : activeTurns.size > 1 ? 'busy' : 'ready';
+      emit({type:'failure',requestId:command.requestId,turnId:command.turnId,
+        code:cancelled ? 'native_cancelled' : 'native_reply_invalid',
+        message:cancelled ? 'TRAE 已取消本轮；原会话保留，可以发送新消息继续。' : error.message,
+        status:cancelled ? 'cancelled' : 'failed',retryable:false});
     } else {
       const ambiguous = accepted || (sendAttempted && !rejected && !error.nativeCode)
         || /timed out/.test(error.message);
-      status = ambiguous ? 'error' : 'ready';
+      if (ambiguous && accepted) unsettledMessageIds.add(sent.message_id);
+      if (ambiguous && !accepted) unknownAcceptance = true;
+      status = ambiguous || unknownAcceptance || unsettledMessageIds.size ? 'error' : activeTurns.size > 1 ? 'busy' : 'ready';
       fail(command,error.message,ambiguous);
     }
   } finally {
     finished = true;
+    clearTimeout(deadlineTimer);
     clearInterval(historyTimer);
     stream?.dispose?.();
-    activeTurn = undefined;
+    activeTurns.delete(command.turnId);
+    if (status !== 'closed' && status !== 'detached') {
+      status = unknownAcceptance || unsettledMessageIds.size || status === 'error' ? 'error' : activeTurns.size ? 'busy' : 'ready';
+    }
   }
 }
 
@@ -200,33 +254,35 @@ async function handle(command) {
     case 'hello': emit({type:'hello',requestId:command.requestId,provider,capabilities}); break;
     case 'start': case 'resume': await setup(command); break;
     case 'turn':
-      if (!state || status !== 'ready' || activeTurn) throw new Error('Native session is not ready');
+      if (state) await recoverSettledTurn();
+      if (!state || !['ready','busy'].includes(status) || activeTurns.size >= 32) throw new Error('Native session is not ready');
       void runTurn(command); break;
     case 'cancel': {
       if (!state) throw new Error('No native session');
-      const turn = activeTurn;
-      let settleCancel;
-      if (turn) {
-        // Stop must follow send_message's acknowledgement; otherwise a late
-        // accepted message could start after the close acknowledgement.
-        turn.cancelSettled = new Promise(resolve => {settleCancel = resolve;});
-        await turn.acceptanceSettled;
+      const turns = [...activeTurns.values()], settleCancels = [];
+      // Stop must follow every send_message acknowledgement, including native
+      // inbox appends, so no accepted input can start after close is confirmed.
+      for (const turn of turns) {
+        turn.cancelSettled = new Promise(resolve => {settleCancels.push(resolve);});
       }
+      await Promise.all(turns.map(turn => turn.acceptanceSettled));
       try {
         await client.request('lite','stop_chat_session',{chat_session_id:state.agentThreadId},state.agentThreadId);
-        if (turn) turn.cancelled = true;
+        for (const turn of turns) turn.cancelled = true;
         // Closing admission preserves native history for TRAE and rebuild.
         status = 'closed';
         emit({type:'status',requestId:command.requestId,status,state});
-      } finally {settleCancel?.();}
+      } finally {for (const settle of settleCancels) settle();}
       break;
     }
     case 'detach':
       // Detachment leaves the native conversation and server alive.
-      if (!state || activeTurn) throw new Error('Settle the native turn before detaching');
+      if (!state || activeTurns.size) throw new Error('Settle the native turn before detaching');
       status = 'detached';emit({type:'status',requestId:command.requestId,status,state});break;
     case 'reattach':
-      if (!state || activeTurn) throw new Error('Native session cannot reattach yet');
+      if (!state || activeTurns.size) throw new Error('Native session cannot reattach yet');
+      await recoverSettledTurn();
+      if (unknownAcceptance || unsettledMessageIds.size) throw new Error('Native outcome is still unknown');
       status = 'ready';emit({type:'status',requestId:command.requestId,status,state});break;
     case 'status':emit({type:'status',requestId:command.requestId,status,state});break;
     default:throw new Error('Unsupported runner command');
@@ -245,7 +301,7 @@ input.on('close',() => {
   // A worker may close stdin while the native turn still needs callbacks.
   // Keep this client alive until that turn terminates.
   const close = () => {
-    if (activeTurn) {setTimeout(close,1000);return;}
+    if (activeTurns.size) {setTimeout(close,1000);return;}
     client?.close();setTimeout(() => process.exit(),200);
   };
   void queue.finally(close);

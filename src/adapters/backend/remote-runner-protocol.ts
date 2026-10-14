@@ -40,11 +40,16 @@ export const REMOTE_RUNNER_SESSION_TOOL_CAPABILITIES = [
   'session_tool',
 ] as const;
 
+// Optional: accept additional authenticated turns into the native input inbox
+// while preserving one FIFO terminal per input. Older providers stay serial.
+export const REMOTE_RUNNER_TYPE_AHEAD_CAPABILITIES = ['concurrent_turns'] as const;
+
 export const REMOTE_RUNNER_CAPABILITIES = [
   ...REMOTE_RUNNER_BASE_CAPABILITIES,
   ...REMOTE_RUNNER_TERMINAL_CAPABILITIES,
   ...REMOTE_RUNNER_OUTBOUND_CAPABILITIES,
   ...REMOTE_RUNNER_SESSION_TOOL_CAPABILITIES,
+  ...REMOTE_RUNNER_TYPE_AHEAD_CAPABILITIES,
 ] as const;
 
 export type RemoteRunnerCapability = typeof REMOTE_RUNNER_CAPABILITIES[number];

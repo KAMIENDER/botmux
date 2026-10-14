@@ -13707,7 +13707,8 @@ function runtimePtyInputPolicy(): ReturnType<typeof resolvePtyInputPolicy> {
   return resolvePtyInputPolicy(
     cliAdapter ?? {},
     backendScreenEvidenceIsAuthoritativeForMutation(),
-    codexAppRuntimeTypeAheadReady(),
+    codexAppRuntimeTypeAheadReady()
+      || (effectiveBackendType === 'remote-runner' && backend?.supportsTurnTypeAhead?.() === true),
   );
 }
 

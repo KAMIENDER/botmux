@@ -128,6 +128,8 @@ export interface SessionBackend {
    * bypass terminal keystroke adapters and receive the daemon-authenticated
    * turn envelope directly. */
   submitTurn?(input: BackendTurnInput): Promise<BackendTurnSubmission>;
+  /** True only after a structured provider advertises native queued-input support. */
+  supportsTurnTypeAhead?(): boolean;
   /**
    * Begin one logical adapter submission and return its recovery fence.
    * Backends with a persistent ambiguity journal may arm it here so all

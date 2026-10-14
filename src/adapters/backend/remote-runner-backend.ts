@@ -100,6 +100,10 @@ export class RemoteRunnerBackend implements SessionBackend {
   private terminalRows: number | null = null;
   private activeTurnId: string | null = null;
   private activeTurnAccepted = false;
+  private readonly queuedTurns = new Map<string, {
+    requestId: string; accepted: boolean; progress: string;
+    terminal?: Extract<RemoteRunnerEvent, { type: 'final' | 'failure' }>;
+  }>();
   private ready = false;
   private killed = false;
   private closing = false;
@@ -171,7 +175,7 @@ export class RemoteRunnerBackend implements SessionBackend {
       this.child = null;
       this.ready = false;
       const expected = this.killed || this.closePrepared || this.shutdownDetaching;
-      if (!expected && this.activeTurnId) {
+      while (!expected && this.activeTurnId) {
         this.emitTurnFailure({
           turnId: this.activeTurnId,
           code: 'provider_exited',
@@ -203,6 +207,10 @@ export class RemoteRunnerBackend implements SessionBackend {
     return true;
   }
 
+  supportsTurnTypeAhead(): boolean {
+    return this.ready && this.providerCapabilities.has('concurrent_turns');
+  }
+
   async submitTurn(input: BackendTurnInput): Promise<BackendTurnSubmission> {
     try {
       if (!this.startupPromise) throw new Error('remote runner has not spawned');
@@ -222,6 +230,7 @@ export class RemoteRunnerBackend implements SessionBackend {
       };
     }
     if (this.activeTurnId) {
+      if (this.supportsTurnTypeAhead()) return this.submitQueuedTurn(input);
       return {
         submitted: false,
         submissionDisposition: 'untouched',
@@ -274,6 +283,36 @@ export class RemoteRunnerBackend implements SessionBackend {
         submissionDisposition: 'dirty_unknown',
         failureReason: reason,
       };
+    }
+  }
+
+  private async submitQueuedTurn(input: BackendTurnInput): Promise<BackendTurnSubmission> {
+    if (this.queuedTurns.size >= 32 || this.activeTurnId === input.turnId || this.queuedTurns.has(input.turnId)) {
+      return { submitted: false, submissionDisposition: 'untouched', failureReason: 'remote input inbox is full or the turn already exists' };
+    }
+    const requestId = this.requestId('queued-turn');
+    const queued = { requestId, accepted: false, progress: '' };
+    this.queuedTurns.set(input.turnId, queued);
+    try {
+      const acknowledgement = await this.request(remoteRunnerCommand('turn', {
+        requestId, turnId: input.turnId, content: input.content,
+        ...(input.trustedCaller ? { trustedCaller: input.trustedCaller } : {}),
+      }), event => event.type === 'status' && event.status === 'busy', this.operationTimeoutMs);
+      if (acknowledgement.type === 'failure') {
+        // A predecessor can settle during the append RPC. Its successor then
+        // becomes the exact active head before this failure acknowledgement.
+        setImmediate(() => {
+          if (!this.killed && this.activeTurnId === input.turnId) this.emitTurnFailure({
+            turnId: input.turnId, code: acknowledgement.code, message: acknowledgement.message,
+            status: acknowledgement.status, retryable: acknowledgement.retryable,
+          });
+        });
+      }
+      return { submitted: true };
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      this.failProtocol(`queued turn acknowledgement failed: ${reason}`);
+      return { submitted: false, submissionDisposition: 'dirty_unknown', failureReason: reason };
     }
   }
 
@@ -578,6 +617,31 @@ export class RemoteRunnerBackend implements SessionBackend {
       this.screenResyncCb?.(snapshot);
       return;
     }
+    if ('turnId' in event && typeof event.turnId === 'string' && this.queuedTurns.has(event.turnId)) {
+      const queued = this.queuedTurns.get(event.turnId)!;
+      if (event.type === 'failure' && !queued.accepted) {
+        const pending = this.pendingRequests.get(queued.requestId);
+        if (!pending || (event.requestId && event.requestId !== queued.requestId)) {
+          this.failProtocol('queued turn rejection has no matching request');return;
+        }
+        clearTimeout(pending.timer);
+        this.pendingRequests.delete(queued.requestId);
+        queued.accepted = true;
+        queued.terminal = event;
+        pending.resolve(event);
+        return;
+      }
+      if (!queued.accepted || queued.terminal) {
+        this.failProtocol('queued turn event arrived outside its acknowledged lifetime');return;
+      }
+      // Native inbox turns can finish before the preceding viewer has hydrated
+      // its final. Preserve FIFO attribution; never publish a successor's final
+      // under the old authenticated turn. Progress is bounded, terminals exact.
+      if (event.type === 'progress') queued.progress = (queued.progress + event.content).slice(-32768);
+      else if (event.type === 'final' || event.type === 'failure') queued.terminal = event;
+      else this.failProtocol('queued turn emitted an unsupported host operation');
+      return;
+    }
     if (event.type === 'progress') {
       if (!this.acceptAcknowledgedTurn(event.turnId)) return;
       // Providers send structured progress text rather than PTY bytes and may
@@ -675,6 +739,9 @@ export class RemoteRunnerBackend implements SessionBackend {
     if (pending.command.type === 'turn' && this.activeTurnRequestId === id
         && event.type === 'status' && event.status === 'busy') {
       this.activeTurnAccepted = true;
+    } else if (pending.command.type === 'turn' && event.type === 'status' && event.status === 'busy') {
+      const queued = this.queuedTurns.get(pending.command.turnId);
+      if (queued?.requestId === id) queued.accepted = true;
     }
     if (event.type === 'failure') pending.reject(new Error(`${event.code}: ${event.message}`));
     else pending.resolve(event);
@@ -876,6 +943,22 @@ export class RemoteRunnerBackend implements SessionBackend {
     this.sessionToolOperations.clear();
     this.sessionToolOperationCount = 0;
     if (turnId) this.hostResultWrites.delete(turnId);
+    const next = this.queuedTurns.entries().next().value;
+    if (next) {
+      const [nextTurnId, queued] = next;
+      this.queuedTurns.delete(nextTurnId);
+      this.activeTurnId = nextTurnId;
+      this.activeTurnAccepted = queued.accepted;
+      this.activeTurnRequestId = queued.requestId;
+      // onTaskDone advances the worker's existing type-ahead envelope first.
+      setImmediate(() => {
+        if (this.killed || this.activeTurnId !== nextTurnId) return;
+        if (queued.progress) this.handleEvent({ protocol: 'botmux.remote-runner', version: 1,
+          type: 'progress', turnId: nextTurnId, content: queued.progress });
+        if (queued.terminal && this.activeTurnId === nextTurnId) this.handleEvent(queued.terminal);
+      });
+      return;
+    }
     const settle = this.settleTurn;
     this.settleTurn = null;
     settle?.();
@@ -968,7 +1051,9 @@ export class RemoteRunnerBackend implements SessionBackend {
   private failProtocol(reason: string): void {
     if (this.killed) return;
     logger.error(`[remote-runner] ${reason}; stderr_bytes=${this.stderrBytes}`);
-    if (this.activeTurnId) {
+    this.ready = false;
+    this.killed = true;
+    while (this.activeTurnId) {
       this.emitTurnFailure({
         turnId: this.activeTurnId,
         code: 'remote_runner_protocol_error',
