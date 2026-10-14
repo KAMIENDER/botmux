@@ -40,6 +40,8 @@ launchctl bootstrap gui/$(id -u) \
 
 - cliId 为 codex-app，cliPathOverride 使用安装生成的 launcher。当前
   codex-app 不接受 structured cliRuntime，不把它冒充成 codex TUI。
+- codexAppCleanInput 设为 true，让消息带上原生 clientUserMessageId，便于
+  准确对应投递与回复；图片也通过原生图片输入传到 Mac。
 - workingDir 和 defaultWorkingDir 指向 SG 输出的 workspace alias。
 - 新建飞书应用的 owner 必须用邮箱/union_id，不能复制其它应用的 open_id。
 - 不把开发机已有 Bot 改成 Mac 节点；每个机器人独立选择执行节点。
@@ -63,6 +65,9 @@ Botmux 的目录存在性检查在 SG 本机执行，所以 SG workspace 是控�
 - 隧道断开不重放 in-flight JSON-RPC；无法确认的 turn 交给现有 Codex runner
   按未知结果处理。恢复连接后需用户明确重试，避免重复执行。
 - native App Server 常驻在 Mac。单个 SG proxy 退出只断开客户端。
+- 续接正在运行的桌面对话时，runner 在发布输入就绪状态前读取原生 turn 摘要，
+  恢复当前运行的 turn ID。可交互的新消息因此进入当前 turn 的 steer 路径；
+  不读取整份长对话历史，也不重放旧的未确认输入。
 - Mac 节点自己的文件句柄软上限设为 8192，避免默认 256 导致插件和 Skill 读取失败；
   不修改系统全局上限。status.json 的 nofile_soft 是该次实际启动继承的值。
   更新配置不改变既有进程的上限，共享后端重启才生效；需要先结束桌面运行中的任务。

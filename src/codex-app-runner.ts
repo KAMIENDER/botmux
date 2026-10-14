@@ -785,6 +785,8 @@ let activeTurnEpoch = 0;
  * is incorrectly sent with turn/start and its completion can be discarded as
  * belonging to an "unexpected" native turn. */
 let nativeActiveTurnId: string | undefined;
+// Lifecycle notifications win over a resume-time history snapshot.
+let nativeTurnLifecycleRevision = 0;
 const queue: QueuedInput[] = [];
 let inputBuffer = '';
 let processing = false;
@@ -1276,6 +1278,7 @@ function handleNotification(msg: JsonObject, replayedAfterResponse = false): voi
   }
 
   if (msg.method === 'turn/started') {
+    nativeTurnLifecycleRevision++;
     const startedId = typeof notificationTurnId === 'string' ? notificationTurnId : undefined;
     if (startedId && (!replayedAfterResponse
         || nativeActiveTurnId === undefined
@@ -1327,6 +1330,7 @@ function handleNotification(msg: JsonObject, replayedAfterResponse = false): voi
   }
 
   if (msg.method === 'turn/completed') {
+    nativeTurnLifecycleRevision++;
     const nativeTurn = params.turn ?? {};
     const completedId = typeof notificationTurnId === 'string' ? notificationTurnId : undefined;
     if (completedId) cancelUserInputRequests(completedId);
@@ -1586,6 +1590,45 @@ function isDefiniteRpcRejection(error: unknown): boolean {
     || isExplicitExpectedTurnInactive(error);
 }
 
+/** A fresh SG runner did not observe turn/started for work already running in
+ * the desktop. Hydrate only its native turn identity before publishing ready;
+ * full thread history can exceed the Mac transport's bounded frame size. */
+async function restoreNativeActiveTurn(
+  resumedThread: JsonObject,
+  startupDeadlineAtMs?: number,
+): Promise<void> {
+  if (resumedThread.status?.type !== 'active' || nativeActiveTurnId !== undefined) return;
+  const revision = nativeTurnLifecycleRevision;
+  let result: JsonObject;
+  try {
+    result = await client.request('thread/turns/list', {
+      threadId: resumedThread.id,
+      limit: 1,
+      sortDirection: 'desc',
+      itemsView: 'summary',
+    }, { timeoutMs: startupRequestTimeout(startupDeadlineAtMs, 'thread/turns/list') });
+  } catch (error) {
+    // Older app-servers lack the summary view. Preserve their prior resume
+    // behavior only for explicit capability rejection, never transport loss.
+    if (error instanceof AppServerRpcError
+        && (error.code === -32601 || error.code === -32602
+          || /unknown variant.*summary|unknown field.*itemsView/i.test(error.message))) {
+      writeLine('[codex-app] native active-turn summary is unsupported by this app-server');
+      return;
+    }
+    throw error;
+  }
+  if (!Array.isArray(result.data)) throw new Error('Invalid native active-turn summary');
+  // A completed/started notification may arrive while the query is in flight.
+  // Never resurrect the snapshot's old busy turn over that live evidence.
+  if (nativeTurnLifecycleRevision !== revision || nativeActiveTurnId !== undefined) return;
+  const current = result.data[0];
+  if (current?.status === 'inProgress' && typeof current.id === 'string') {
+    nativeActiveTurnId = current.id;
+    writeLine(`[codex-app] reattached to native active turn ${current.id}`);
+  }
+}
+
 async function ensureThread(startupDeadlineAtMs?: number): Promise<string> {
   if (client.hasExited && !activeTurn && nativeActiveTurnId === undefined && !generationFenced) {
     // 只恢复尚未投递的新输入；已发送轮次的未知结果仍由 fenceUnknown 保护。
@@ -1623,6 +1666,7 @@ async function ensureThread(startupDeadlineAtMs?: number): Promise<string> {
         throw new Error(`Strict resume expected thread ${threadId}, received ${resumedThreadId}`);
       }
       threadId = resumedThreadId;
+      await restoreNativeActiveTurn(resumed.thread, startupDeadlineAtMs);
       threadReady = true;
       emitMarker('thread', { threadId: resumedThreadId });
       return resumedThreadId;
@@ -1632,7 +1676,8 @@ async function ensureThread(startupDeadlineAtMs?: number): Promise<string> {
       // explicit app-server "missing thread" rejection permits normal fallback;
       // maintenance resumes must preserve the original thread in every case.
       if (isActiveWriterConflict(err)) throw new CodexAppActiveWriterError(threadId, err);
-      if (strictThreadResume || !isExplicitMissingThread(err)) throw err;
+      if (strictThreadResume || !isExplicitMissingThread(err)
+          || (err instanceof AppServerRpcError && err.method !== 'thread/resume')) throw err;
       writeLine(`[codex-app] resume failed, starting a fresh thread: ${err?.message ?? err}`);
       threadId = undefined;
       threadReady = false;
