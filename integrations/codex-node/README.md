@@ -58,9 +58,14 @@ Botmux 的目录存在性检查在 SG 本机执行，所以 SG workspace 是控�
 ## 生命周期与边界
 
 - Mac host 对进程使用独占锁，登录后启动，SSH 断线按有界退避重连。
+- proxy 检查隧道 socket 的 inode，并以原生 WebSocket ping/pong 确認连接存活；
+  SSH 重连留下的旧连接会明确失败，不继续吞消息或靠进程存活假称在线。
 - 隧道断开不重放 in-flight JSON-RPC；无法确认的 turn 交给现有 Codex runner
   按未知结果处理。恢复连接后需用户明确重试，避免重复执行。
 - native App Server 常驻在 Mac。单个 SG proxy 退出只断开客户端。
+- Mac 节点自己的文件句柄软上限设为 8192，避免默认 256 导致插件和 Skill 读取失败；
+  不修改系统全局上限。status.json 的 nofile_soft 是该次实际启动继承的值。
+  更新配置不改变既有进程的上限，共享后端重启才生效；需要先结束桌面运行中的任务。
 - 既有桌面端 thread 的 writer ownership 不变；不强行恢复正由另一个服务端写入
   的 thread，不修改锁文件，不宣称接入能接管所有正在运行的桌面会话。
 - cwd 映射覆盖 workspace 和显式配置的 remote-root；其余目录没有自动跨主机路由。

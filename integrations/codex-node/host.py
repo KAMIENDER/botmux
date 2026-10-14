@@ -4,7 +4,7 @@
 There is no IM receiver or Botmux daemon here. SSH credentials and Codex auth
 remain in their existing host stores; disconnects never replay task requests.
 """
-import fcntl, json, os, pathlib, signal, stat, subprocess, sys, time
+import fcntl, json, os, pathlib, resource, signal, stat, subprocess, sys, time
 from desktop_connection import publish_desktop_endpoint
 
 config_path = pathlib.Path(sys.argv[1])
@@ -12,6 +12,15 @@ config = json.loads(config_path.read_text())
 state_dir = config_path.parent
 state_dir.mkdir(parents=True, exist_ok=True)
 state_dir.chmod(0o700)
+
+# launchd defaults to 256 open files. Concurrent plugin pipes plus skill reads
+# can exceed that even with only a few desktop threads. Raise only this node
+# and its children, keeping any stricter inherited hard limit intact.
+nofile_soft, nofile_hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+nofile_target = 8192 if nofile_hard == resource.RLIM_INFINITY else min(8192, nofile_hard)
+if nofile_soft != resource.RLIM_INFINITY and nofile_soft < nofile_target:
+    resource.setrlimit(resource.RLIMIT_NOFILE, (nofile_target, nofile_hard))
+nofile_soft = resource.getrlimit(resource.RLIMIT_NOFILE)[0]
 lock = open(str(state_dir / 'host.lock'), 'a')
 os.chmod(str(state_dir / 'host.lock'), 0o600)
 try:
@@ -32,6 +41,7 @@ signal.signal(signal.SIGINT, stop)
 
 def write_status(**data):
     data['updated_at'] = int(time.time())
+    data['nofile_soft'] = nofile_soft
     tmp = state_dir / 'status.json.tmp'
     tmp.write_text(json.dumps(data) + '\n')
     tmp.chmod(0o600)

@@ -36,6 +36,7 @@ with plist_path.open('wb') as f:
     plistlib.dump({'Label':label,'ProgramArguments':[sys.executable,str(lib/'host.py'),str(config_path)],
         'WorkingDirectory':str(workspace),'RunAtLoad':True,'KeepAlive':True,'ThrottleInterval':10,
         'EnvironmentVariables':{'PATH':os.environ.get('PATH','/usr/bin:/bin')},
+        'SoftResourceLimits':{'NumberOfFiles':8192},
         'StandardOutPath':str(state/'launchd.log'),'StandardErrorPath':str(state/'launchd.log')},f)
 plist_path.chmod(0o600)
 log=state/'launchd.log'

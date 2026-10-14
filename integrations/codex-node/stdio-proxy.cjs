@@ -18,6 +18,8 @@ const MAX_BYTES = 16 * 1024 * 1024;
 const pending = [];
 let pendingBytes = 0, buffer = '', closing = false, opened = false;
 const startedAt = Date.now();
+const HEARTBEAT_INTERVAL_MS = 15000, HEARTBEAT_TIMEOUT_MS = 15000;
+let heartbeatNonce, heartbeatSentAt = 0, lastHeartbeatAt = 0;
 function fail(reason) {
   if (closing) return;
   closing = true;
@@ -36,10 +38,39 @@ if (parentStat.uid !== process.getuid() || (parentStat.mode & 0o077)) {
   console.error('codex-node: tunnel directory must be private and owned by the current user');
   process.exit(2);
 }
+// SSH can replace the listening pathname while an old accepted socket stays
+// half open on SG. Pin this connection to the tunnel generation, not its name.
+const tunnelSocket = fs.statSync(config.socket);
 const ws = new WebSocket('ws+unix://' + config.socket, {maxPayload:MAX_BYTES, handshakeTimeout:8000});
 const watchdog = setInterval(() => {
-  if ((!opened || metadata) && Date.now() - startedAt > 10000) fail('Mac connection timed out');
+  const now = Date.now();
+  if ((!opened || metadata) && now - startedAt > 10000) {
+    fail('Mac connection timed out'); return;
+  }
+  if (!opened || metadata || closing) return;
+  let currentSocket;
+  try {currentSocket = fs.statSync(config.socket);}
+  catch {fail('Mac tunnel socket disappeared; in-flight requests are not replayed');return;}
+  if (currentSocket.dev !== tunnelSocket.dev || currentSocket.ino !== tunnelSocket.ino) {
+    fail('Mac tunnel was replaced; in-flight requests are not replayed');return;
+  }
+  // A pathname can remain unchanged during a half-open SSH connection. Require
+  // an actual native WebSocket pong; TCP/SSH process presence is not liveness.
+  if (heartbeatNonce && now - heartbeatSentAt >= HEARTBEAT_TIMEOUT_MS) {
+    fail('Mac WebSocket heartbeat timed out; in-flight requests are not replayed');return;
+  }
+  if (!heartbeatNonce && now - lastHeartbeatAt >= HEARTBEAT_INTERVAL_MS) {
+    heartbeatNonce = require('node:crypto').randomBytes(16);
+    heartbeatSentAt = now; lastHeartbeatAt = now;
+    ws.ping(heartbeatNonce, error => {if (error) fail('Mac heartbeat transport failed');});
+  }
 }, 1000);
+ws.on('pong', payload => {
+  if (heartbeatNonce && Buffer.from(payload).equals(heartbeatNonce)) {
+    heartbeatNonce = undefined;
+    lastHeartbeatAt = Date.now();
+  }
+});
 const nodeDir = path.posix.normalize(path.dirname(config.socket));
 const mappings = [
   {localRoot:config.localWorkspace, remoteRoot:config.remoteWorkspace},
@@ -166,7 +197,7 @@ function sendLine(line) {
   }
 }
 ws.on('open',()=>{
-  opened=true;
+  opened=true;lastHeartbeatAt=Date.now();
   if (metadata) {
     ws.send(JSON.stringify({id:1,method:'initialize',params:{
       clientInfo:{name:'botmux_codex_node_metadata',version:'1'},
