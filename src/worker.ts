@@ -11660,7 +11660,7 @@ async function handleTrustedCodexAppMarker(
     }
     // Authenticated native busy includes desktop/Goal work outside the last
     // Botmux-owned message. Preserve turn receipts while projecting that work.
-    nativeSessionBusy = state.busy;
+    if (typeof state.busy === 'boolean') nativeSessionBusy = state.busy;
     if (state.busy) publishScreenStatus('working', { force: true });
     return true;
   }
