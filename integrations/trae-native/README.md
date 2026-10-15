@@ -112,6 +112,18 @@
 但 TRAE 的 Goal 或桌面任务仍在运行时，卡片继续显示工作中。活动状态只控制展示，
 不改变该消息的完成回执，也不阻止运行中追加输入。
 
+## 原生 Goal
+
+飞书中的明确命令通过结构化 turn 处理，不交给模型解释：
+
+- `/goal` 或 `/goal status`：只读当前原生 Goal。
+- `/goal continue`（或 `/goal resume`）：调用原生 `goal.update`，设置 `status=active` 和 `start_continuation=true`，再回读同一个 Goal 确认状态。
+- `/goal pause`：设置 `status=paused`，关闭自动续跑；不调用整会话 stop，也不承诺中断当前正在执行的工具。
+
+命令仅识别完整用户消息，支持 Botmux 路由包装和前导 mention；代码示例、引用、混合正文或多个用户消息块不会触发控制。`/goal <目标正文>` 继续按原有普通消息处理。没有 Goal 时只报告，不新建或替换；普通聊天、状态轮询、恢复连接也不会自动恢复 Goal。
+
+普通消息的原生回复完成后，会再次读取 Goal 并在适配器 final 中附上真实状态；暂停/阻塞时明确提示自动续跑尚未恢复。原生状态读取失败时标明未核验，不把模型说的“继续”当作已恢复。原生控制也保留 turn ACK/final 关联；更新超时不自动重试，未知结果遵循现有写入保护。
+
 ## 生命周期与边界
 
 - 原生后端在开发机常驻，Mac 只是客户端。开发机本身关机、网络或登录失效仍会影响运行。
@@ -140,6 +152,11 @@ TRAE 升级可能更换安装路径、SDK 或内部接口。先暂停目标 Bot�
 - 原生 SSH 任务在桌面项目列表显示，并能从桌面继续。
 - Botmux 真正的 `session start --headless` 执行原生 Shell，返回 `BOTMUX_NATIVE_OK`，持久状态保存原生会话 ID。
 - 宿主 helper 接入已有原生任务，Botmux 读到桌面之前的英文标记并返回；只重启目标 Bot 后再次续聊仍保留原生 ID 和上下文。
+
+### Goal 控制验证（2026-10-15）
+
+- `bun run test -- test/trae-native-goal.test.ts test/remote-runner-backend.test.ts test/remote-runner-protocol.test.ts test/remote-runner-explicit-close.test.ts`：79 项通过，覆盖命令与讨论文本区分、Goal 直接控制与回读、消息 ACK/final 关联、普通聊天保留暂停、更新超时不重试及读取状态期间取消的竞态。
+- 独立新建的原生测试会话中，同一个 Goal 经真实接口验证 `paused → active → paused`；恢复请求包含 `start_continuation=true`。测试后停止并删除该隔离会话；现有业务 Goal 的 ID 与 active 状态保留。
 - Botmux 关闭验证会话成功，原生历史仍可读取。
 - 在未加入初始化目录列表的 `/home/hejiadong.1024/project/ai_review_self_iteration` 中，真实 headless 运行自动创建原生会话并返回 `AUTO_WORKSPACE_OK`；没有手动打开或初始化该项目。此项验证没有执行工具或业务任务。
 - 原生 SOLO Agent 模型目录自动返回 20 个当前可选预置模型，包括 GPT-6.1-Sol、GPT-6-Astra 和 GPT-5.6 系列；无需保存一份静态模型名单。

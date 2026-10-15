@@ -3,6 +3,7 @@
 const readline = require('node:readline');
 const {validateDirectory} = require('./workspace.cjs');
 const {NativeClient,privateJson} = require('./native-client.cjs');
+const {parseGoalCommand,readGoal,formatGoalStatus,controlGoal} = require('./goal.cjs');
 
 const protocol = 'botmux.remote-runner';
 const version = 1;
@@ -25,14 +26,23 @@ function terminalReply(reply) {
   return ['completed','canceled','cancelled'].includes(reply?.status);
 }
 
-function publishNativeFinal(command, reply) {
+async function publishNativeFinal(command, reply) {
   const content = typeof reply.content === 'string' ? JSON.parse(reply.content) : reply.content;
   const summary = content?.messages?.findLast(x => x.plan_item?.tool_call_info?.name === 'finish')
     ?.plan_item.tool_call_info.params?.summary;
   if (!summary) throw new Error('Native turn completed without a text summary');
+  let goalNote;
+  try {
+    const goal = await readGoal(client,state.agentThreadId);
+    if (goal) goalNote = formatGoalStatus(goal);
+  } catch {
+    goalNote = 'TRAE 原生 Goal 状态未能核验；本轮回复不代表 Goal 已恢复。';
+  }
+  if (command.cancelSettled) await command.cancelSettled;
+  if (command.cancelled || status === 'closed') throw new Error('Native turn was cancelled');
   unsettledMessageIds.delete(reply.reply_to_message_id);
   status = unknownAcceptance || unsettledMessageIds.size ? 'error' : activeTurns.size > 1 ? 'busy' : 'ready';
-  emit({type:'final',turnId:command.turnId,content:summary,state});
+  emit({type:'final',turnId:command.turnId,content:goalNote ? `${summary}\n\n${goalNote}` : summary,state});
 }
 
 async function recoverSettledTurn() {
@@ -140,6 +150,16 @@ async function runTurn(command) {
   try {
     await Promise.all(predecessors.map(turn => turn.acceptanceSettled));
     if (status === 'closed' || unknownAcceptance || unsettledMessageIds.size) throw new Error('Prior native input has not settled');
+    const goalAction = parseGoalCommand(command.content);
+    if (goalAction) {
+      // Keep the structured turn ACK/final ledger, but do not send a control
+      // command to the model or synthesize a persisted native assistant reply.
+      const goal = await controlGoal(client,sid,goalAction,() => {sendAttempted = true;});
+      settleAcceptance();
+      emit({type:'status',requestId:command.requestId,status:'busy',state});
+      emit({type:'final',turnId:command.turnId,content:formatGoalStatus(goal),state});
+      return;
+    }
     // Never replay an accepted request after a timeout: the backend may have
     // executed tools even when the transport lost its acknowledgement.
     const content = command.content;
@@ -204,7 +224,7 @@ async function runTurn(command) {
     // assistant reply to our exact message ID, never another client's finish.
     verifiedReply ||= await nativeReply(sid,sent.message_id);
     if (verifiedReply?.status !== 'completed') throw new Error('Cannot verify the native reply for this turn');
-    publishNativeFinal(command,verifiedReply);
+    await publishNativeFinal(command,verifiedReply);
   } catch (error) {
     settleAcceptance();
     if (command.cancelSettled) await command.cancelSettled;
@@ -218,7 +238,7 @@ async function runTurn(command) {
         code:'native_cancelled',message:'Native turn cancelled',status:'cancelled',retryable:false});
     } else if (terminalReply(verifiedReply)) {
       if (verifiedReply.status === 'completed') {
-        try {publishNativeFinal(command,verifiedReply);return;}
+        try {await publishNativeFinal(command,verifiedReply);return;}
         catch (replyError) {error=replyError;}
       }
       const cancelled = verifiedReply.status !== 'completed';
